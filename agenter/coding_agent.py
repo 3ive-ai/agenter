@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -10,8 +9,16 @@ import structlog
 
 from .coding_backends.anthropic_sdk import AnthropicSDKBackend
 from .coding_backends.claude_code import ClaudeCodeBackend
-from .config import BACKEND_ANTHROPIC_SDK, BACKEND_CLAUDE_CODE, BACKEND_CODEX, BACKEND_OPENHANDS, default_backend
+from .config import (
+    BACKEND_ACP,
+    BACKEND_ANTHROPIC_SDK,
+    BACKEND_CLAUDE_CODE,
+    BACKEND_CODEX,
+    BACKEND_OPENHANDS,
+    default_backend,
+)
 from .data_models import CodingEvent, CodingRequest, CodingResult, Verbosity
+from .logging import configure_logging
 from .post_validators.syntax import SyntaxValidator
 from .runtime import CodingSession, ConsoleDisplay, Tracer
 
@@ -69,6 +76,16 @@ class AutonomousCodingAgent:
         # Codex-specific options
         codex_approval_policy: str = "never",
         codex_mcp_servers: list[CodexMCPServer] | None = None,
+        codex_reasoning_effort: str | None = None,
+        # Claude Code-specific options
+        claude_max_thinking_tokens: int | None = None,
+        # ACP-specific options
+        acp_command: str | None = None,
+        acp_args: list[str] | None = None,
+        acp_env: dict[str, str] | None = None,
+        acp_mcp_servers: list[Any] | None = None,
+        acp_permission_policy: str = "deny",
+        acp_autonomous: bool = True,
     ):
         """Initialize the agent.
 
@@ -79,8 +96,9 @@ class AutonomousCodingAgent:
                 - "claude-code": Claude Code SDK with native sandbox
                 - "codex": OpenAI Codex CLI via MCP server
                 - "openhands": OpenHands SDK (requires sandbox=False)
-            model: Model to use. If None, auto-detects based on environment.
-                Only used with "anthropic-sdk" backend. For codex, defaults to "o3".
+                - "acp": Agent Client Protocol subprocess backend
+            model: Model to use. Used by "anthropic-sdk", "claude-code", and "codex".
+                If None, each backend uses its own default.
             tools: Additional custom tools. Works with all backends.
             validators: Validators to run on generated code. Defaults to [SyntaxValidator()].
             use_anthropic_tools: Use Anthropic's built-in text_editor_20250728 tool
@@ -103,16 +121,29 @@ class AutonomousCodingAgent:
                 Defaults to "never" for autonomous operation.
             codex_mcp_servers: Custom MCP servers to pass to Codex (codex only).
                 Gives Codex access to additional tools during execution.
+            codex_reasoning_effort: Optional Codex/OpenAI reasoning effort (codex only).
+                Valid values: "minimal", "low", "medium", "high".
+            claude_max_thinking_tokens: Optional thinking budget for Claude Code (claude-code only).
+            acp_command: Executable for the ACP agent process (acp only).
+            acp_args: Arguments passed to the ACP agent process (acp only).
+            acp_env: Extra environment variables for the ACP agent process (acp only).
+            acp_mcp_servers: MCP server descriptors passed to ACP session/new (acp only).
+            acp_permission_policy: How Agenter answers ACP permission requests.
+                Options: "deny" or "allow". Defaults to "deny".
+            acp_autonomous: Add Agenter's autonomous backend contract to ACP prompts
+                and auto-continue once when an ACP agent asks for confirmation.
+                Defaults to True.
         """
         if backend is None:
             backend = default_backend()
         logger.info("agent_init", backend=backend)
-        if backend not in (BACKEND_ANTHROPIC_SDK, BACKEND_CLAUDE_CODE, BACKEND_CODEX, BACKEND_OPENHANDS):
+        if backend not in (BACKEND_ANTHROPIC_SDK, BACKEND_CLAUDE_CODE, BACKEND_CODEX, BACKEND_OPENHANDS, BACKEND_ACP):
             from .data_models import ConfigurationError
 
             raise ConfigurationError(
                 f"Unknown backend: {backend!r}. "
-                f"Use {BACKEND_ANTHROPIC_SDK!r}, {BACKEND_CLAUDE_CODE!r}, {BACKEND_CODEX!r}, or {BACKEND_OPENHANDS!r}."
+                f"Use {BACKEND_ANTHROPIC_SDK!r}, {BACKEND_CLAUDE_CODE!r}, {BACKEND_CODEX!r}, "
+                f"{BACKEND_OPENHANDS!r}, or {BACKEND_ACP!r}."
             )
         self._backend_type = backend
         self.model = model  # Let backend use its own default if None
@@ -127,6 +158,18 @@ class AutonomousCodingAgent:
         # Codex-specific options
         self._codex_approval_policy = codex_approval_policy
         self._codex_mcp_servers = codex_mcp_servers
+        self._codex_reasoning_effort = codex_reasoning_effort
+
+        # Claude Code-specific options
+        self._claude_max_thinking_tokens = claude_max_thinking_tokens
+
+        # ACP-specific options
+        self._acp_command = acp_command
+        self._acp_args = acp_args
+        self._acp_env = acp_env
+        self._acp_mcp_servers = acp_mcp_servers
+        self._acp_permission_policy = acp_permission_policy
+        self._acp_autonomous = acp_autonomous
 
         if backend == BACKEND_CLAUDE_CODE and use_anthropic_tools:
             logger.warning(
@@ -143,9 +186,28 @@ class AutonomousCodingAgent:
         if backend == BACKEND_CODEX and (use_anthropic_tools or setting_sources or allowed_tools):
             logger.warning("use_anthropic_tools, setting_sources, and allowed_tools are ignored with codex backend.")
 
-        codex_opts_set = codex_approval_policy != "never" or codex_mcp_servers
+        codex_opts_set = codex_approval_policy != "never" or codex_mcp_servers or codex_reasoning_effort
         if backend != BACKEND_CODEX and codex_opts_set:
-            logger.warning("codex_approval_policy and codex_mcp_servers are only used with codex backend.")
+            logger.warning(
+                "codex_approval_policy, codex_mcp_servers, and codex_reasoning_effort are only used with codex backend."
+            )
+
+        if backend != BACKEND_CLAUDE_CODE and claude_max_thinking_tokens is not None:
+            logger.warning("claude_max_thinking_tokens is only used with claude-code backend.")
+
+        acp_opts_set = (
+            acp_command
+            or acp_args
+            or acp_env
+            or acp_mcp_servers
+            or acp_permission_policy != "deny"
+            or not acp_autonomous
+        )
+        if backend != BACKEND_ACP and acp_opts_set:
+            logger.warning(
+                "acp_command, acp_args, acp_env, acp_mcp_servers, acp_permission_policy, "
+                "and acp_autonomous are only used with acp backend."
+            )
 
         if backend == BACKEND_OPENHANDS:
             if sandbox:
@@ -160,6 +222,14 @@ class AutonomousCodingAgent:
                 logger.warning(
                     "use_anthropic_tools, setting_sources, and allowed_tools are ignored with openhands backend."
                 )
+        if backend == BACKEND_ACP and not acp_command:
+            from .data_models import ConfigurationError
+
+            raise ConfigurationError(
+                "acp_command is required when backend='acp'.",
+                parameter="acp_command",
+                value=None,
+            )
 
     def _setup_session(
         self,
@@ -175,9 +245,10 @@ class AutonomousCodingAgent:
         Returns:
             Configured CodingSession ready to run.
         """
-        # Suppress structlog output when QUIET
+        # Suppress structlog output when QUIET, even if a caller previously
+        # configured Agenter logging at DEBUG.
         if verbosity == Verbosity.QUIET:
-            logging.getLogger().setLevel(logging.CRITICAL)
+            configure_logging(quiet=True)
 
         display = None
         if verbosity != Verbosity.QUIET or log_dir:
@@ -256,6 +327,7 @@ class AutonomousCodingAgent:
 
             return CodexBackend(
                 model=self.model,
+                reasoning_effort=self._codex_reasoning_effort,
                 approval_policy=self._codex_approval_policy,
                 sandbox=codex_sandbox_mode,
                 mcp_servers=self._codex_mcp_servers,
@@ -263,10 +335,24 @@ class AutonomousCodingAgent:
             )
         elif self._backend_type == BACKEND_CLAUDE_CODE:
             return ClaudeCodeBackend(
+                model=self.model,
+                max_thinking_tokens=self._claude_max_thinking_tokens,
                 sandbox=self._sandbox,
                 allowed_tools=self._allowed_tools,
                 setting_sources=self._setting_sources,
                 extra_tools=self._extra_tools,
+            )
+        elif self._backend_type == BACKEND_ACP:
+            from .coding_backends.acp import ACPBackend
+
+            return ACPBackend(
+                command=self._acp_command or "",
+                args=self._acp_args,
+                env=self._acp_env,
+                mcp_servers=self._acp_mcp_servers,
+                sandbox=self._sandbox,
+                permission_policy=self._acp_permission_policy,
+                autonomous=self._acp_autonomous,
             )
         elif self._backend_type == BACKEND_OPENHANDS:
             from .coding_backends.openhands import OpenHandsBackend

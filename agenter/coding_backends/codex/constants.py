@@ -11,6 +11,9 @@ CODEX_DEFAULT_APPROVAL_POLICY: Final = "never"
 # Default sandbox mode (workspace-scoped writes)
 CODEX_DEFAULT_SANDBOX: Final = "workspace-write"
 
+# Valid reasoning effort levels for Codex/OpenAI reasoning models.
+CODEX_REASONING_EFFORTS: Final = frozenset({"minimal", "low", "medium", "high"})
+
 # Valid approval policies
 # - untrusted: Requires approval for all commands
 # - on-request: Requires approval for certain sensitive operations

@@ -83,6 +83,9 @@ pip install agenter[codex]
 # Installation with OpenHands support (any model via litellm)
 pip install agenter[openhands]
 
+# Installation with ACP support (Agent Client Protocol agents)
+pip install agenter[acp]
+
 # Installation with specific framework adapters
 pip install agenter[langgraph,pydantic-ai]
 
@@ -98,6 +101,7 @@ pip install agenter[security]
 | **claude-code** | External CLI | [Claude Code CLI](https://github.com/anthropics/claude-code) installed |
 | **codex** | External CLI | [Codex CLI](https://github.com/openai/codex) installed, `OPENAI_API_KEY` |
 | **openhands** | External service | [OpenHands](https://github.com/OpenHands/OpenHands) runtime running |
+| **acp** | External CLI | Any ACP-compatible agent command, `agent-client-protocol` Python package |
 
 The default `anthropic-sdk` backend works as a pure Python library - just set your API key and go.
 Other backends wrap external CLIs/services and require additional setup.
@@ -148,9 +152,27 @@ All of the following coding agent backends default to `sandbox=True` for safe op
 ```python
 # All backends run in safe mode by default
 agent = AutonomousCodingAgent(backend="anthropic-sdk")  # PathResolver enforces cwd
-agent = AutonomousCodingAgent(backend="claude-code")  # Native OS-level sandbox
-agent = AutonomousCodingAgent(backend="codex")  # Workspace-write mode
+agent = AutonomousCodingAgent(
+    backend="claude-code",
+    model="claude-sonnet-4-5-20250929",
+    claude_max_thinking_tokens=8192,
+)  # Native OS-level sandbox
+agent = AutonomousCodingAgent(
+    backend="codex",
+    model="gpt-5.4",
+    codex_reasoning_effort="high",
+)  # Workspace-write mode
+agent = AutonomousCodingAgent(
+    backend="acp",
+    acp_command="codex-acp",
+    acp_args=["-c", 'model="gpt-5.4"', "-c", 'model_reasoning_effort="high"'],
+    acp_permission_policy="allow",
+)
 ```
+
+ACP prompts run with Agenter's autonomous backend contract by default, so
+interactive agents do not pause for routine implementation confirmation. Set
+`acp_autonomous=False` if you want the raw ACP agent behavior.
 
 | Backend | SDK | Providers | Sandbox |
 |---------|-----|-----------|---------|
@@ -158,8 +180,11 @@ agent = AutonomousCodingAgent(backend="codex")  # Workspace-write mode
 | **claude-code** | Claude Code SDK (claude-code-sdk) | Anthropic API, AWS Bedrock, Google Vertex | Native OS-level sandbox |
 | **codex** | OpenAI Codex CLI via MCP | OpenAI API | `workspace-write` mode |
 | **openhands** | OpenHands SDK | Any provider via LiteLLM | ⚠️ **No sandbox** |
+| **acp** | Agent Client Protocol subprocess | ACP-compatible agents | Depends on the launched ACP agent |
 
 > **⚠️ OpenHands Warning:** The OpenHands backend requires `sandbox=False` and has **no filesystem isolation**. It can read and write anywhere on your system. Use it with caution and only in trusted environments.
+>
+> **⚠️ ACP Warning:** The ACP backend launches an external agent process. Agenter can observe changed files after the run, but filesystem isolation depends on the ACP agent and its own flags.
 
 ### Sandbox Disabled (Full File System Access)
 ```python

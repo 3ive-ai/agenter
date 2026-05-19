@@ -53,6 +53,7 @@ from .constants import (
     CODEX_DEFAULT_MODEL,
     CODEX_DEFAULT_SANDBOX,
     CODEX_DEFAULT_TIMEOUT_SECONDS,
+    CODEX_REASONING_EFFORTS,
     CODEX_SANDBOX_MODES,
     CODEX_TOOL_REPLY,
     CODEX_TOOL_START,
@@ -153,6 +154,7 @@ class CodexBackend(BaseBackend):
         self,
         *,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         approval_policy: str = CODEX_DEFAULT_APPROVAL_POLICY,
         sandbox: str = CODEX_DEFAULT_SANDBOX,
         mcp_servers: list[CodexMCPServer] | None = None,
@@ -162,7 +164,9 @@ class CodexBackend(BaseBackend):
         """Initialize the Codex backend.
 
         Args:
-            model: Model to use. Defaults to "o3".
+            model: Model to use. Defaults to "gpt-5.4".
+            reasoning_effort: Optional OpenAI/Codex reasoning effort.
+                Valid values: "minimal", "low", "medium", "high".
             approval_policy: Approval policy for tool execution.
                 Options: "untrusted", "on-request", "on-failure", "never".
                 Defaults to "never" for autonomous operation.
@@ -192,9 +196,17 @@ class CodexBackend(BaseBackend):
                 parameter="sandbox",
                 value=sandbox,
             )
+        if reasoning_effort is not None and reasoning_effort not in CODEX_REASONING_EFFORTS:
+            raise ConfigurationError(
+                f"Invalid reasoning_effort: {reasoning_effort!r}. "
+                f"Must be one of: {', '.join(sorted(CODEX_REASONING_EFFORTS))}",
+                parameter="reasoning_effort",
+                value=reasoning_effort,
+            )
 
         self._model = model or CODEX_DEFAULT_MODEL
         self.model = self._model  # Public attribute for session display
+        self._reasoning_effort = reasoning_effort
         self._approval_policy = approval_policy
         self._sandbox = sandbox
         self._mcp_servers = mcp_servers or []
@@ -284,19 +296,23 @@ class CodexBackend(BaseBackend):
         if tool_server:
             all_servers.append(tool_server)
 
-        if not all_servers:
-            return None
+        config: dict[str, Any] = {}
 
-        mcp_config: dict[str, Any] = {}
-        for server in all_servers:
-            server_config: dict[str, Any] = {"command": server.command}
-            if server.args:
-                server_config["args"] = server.args
-            if server.env:
-                server_config["env"] = server.env
-            mcp_config[server.name] = server_config
+        if self._reasoning_effort:
+            config["model_reasoning_effort"] = self._reasoning_effort
 
-        return {"mcp_servers": mcp_config}
+        if all_servers:
+            mcp_config: dict[str, Any] = {}
+            for server in all_servers:
+                server_config: dict[str, Any] = {"command": server.command}
+                if server.args:
+                    server_config["args"] = server.args
+                if server.env:
+                    server_config["env"] = server.env
+                mcp_config[server.name] = server_config
+            config["mcp_servers"] = mcp_config
+
+        return config or None
 
     async def connect(
         self,

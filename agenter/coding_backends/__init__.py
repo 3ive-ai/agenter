@@ -1,5 +1,6 @@
 """Coding backends."""
 
+from .acp import ACPBackend
 from .anthropic_sdk import AnthropicSDKBackend
 from .base import BaseBackend
 from .claude_code import ClaudeCodeBackend
@@ -8,6 +9,7 @@ from .openhands import OpenHandsBackend
 from .protocol import CodingBackend
 
 __all__ = [
+    "ACPBackend",
     "AnthropicSDKBackend",
     "BaseBackend",
     "ClaudeCodeBackend",

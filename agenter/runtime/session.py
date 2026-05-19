@@ -50,6 +50,9 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_IGNORED_PATH_ONLY_DIRS = frozenset({"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+_IGNORED_PATH_ONLY_SUFFIXES = frozenset({".pyc", ".pyo"})
+
 
 class CodingSession:
     """Manages the iteration loop: execute -> validate -> retry.
@@ -111,6 +114,8 @@ class CodingSession:
         files: dict[str, str] = {}
 
         for path in file_changes.paths():
+            if self._should_skip_path_only_file(path):
+                continue
             try:
                 # Validate path is within cwd (prevents ../secret.txt attacks)
                 resolved = resolver.resolve(path)
@@ -124,6 +129,14 @@ class CodingSession:
                 logger.warning("file_read_failed", path=path, reason="not_utf8")
 
         return files
+
+    @staticmethod
+    def _should_skip_path_only_file(path: str) -> bool:
+        candidate = Path(path)
+        return (
+            any(part in _IGNORED_PATH_ONLY_DIRS for part in candidate.parts)
+            or candidate.suffix in _IGNORED_PATH_ONLY_SUFFIXES
+        )
 
     def _dispatch_message(self, message: BackendMessage) -> MessageReceived:
         """Dispatch message to display/tracer and build event data.

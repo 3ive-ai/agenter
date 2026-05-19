@@ -10,6 +10,7 @@ from agenter import (
     BudgetMeter,
     CodingRequest,
     SyntaxValidator,
+    Verbosity,
 )
 from agenter.config import DEFAULT_MAX_ITERATIONS
 from agenter.data_models import BudgetLimitType, ConfigurationError, UsageDelta
@@ -386,6 +387,17 @@ class TestAgentConfiguration:
         """Test agent can be created with no validators."""
         agent = AutonomousCodingAgent(validators=[])
         assert len(agent._validators) == 0
+
+    def test_quiet_verbosity_reconfigures_agenter_logging(self, monkeypatch):
+        """QUIET suppresses structlog even after earlier verbose configuration."""
+        calls = []
+        agent = AutonomousCodingAgent(validators=[])
+        monkeypatch.setattr(agent, "_create_backend", lambda: object())
+        monkeypatch.setattr("agenter.coding_agent.configure_logging", lambda **kwargs: calls.append(kwargs))
+
+        agent._setup_session(Verbosity.QUIET, log_dir=None)
+
+        assert calls == [{"quiet": True}]
 
 
 # =============================================================================

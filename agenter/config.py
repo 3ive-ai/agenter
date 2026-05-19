@@ -27,6 +27,7 @@ BACKEND_ANTHROPIC_SDK: Final = "anthropic-sdk"  # Anthropic SDK with custom tool
 BACKEND_CLAUDE_CODE: Final = "claude-code"  # Claude Code SDK (claude-agent-sdk)
 BACKEND_CODEX: Final = "codex"  # OpenAI Codex CLI via MCP server
 BACKEND_OPENHANDS: Final = "openhands"  # OpenHands SDK
+BACKEND_ACP: Final = "acp"  # Agent Client Protocol subprocess backend
 
 
 def default_model() -> str:
@@ -42,7 +43,15 @@ def is_bedrock() -> bool:
 
 
 # Valid backends for spec parsing
-VALID_BACKENDS: Final = frozenset({BACKEND_ANTHROPIC_SDK, BACKEND_CLAUDE_CODE, BACKEND_CODEX, BACKEND_OPENHANDS})
+VALID_BACKENDS: Final = frozenset(
+    {
+        BACKEND_ANTHROPIC_SDK,
+        BACKEND_CLAUDE_CODE,
+        BACKEND_CODEX,
+        BACKEND_OPENHANDS,
+        BACKEND_ACP,
+    }
+)
 
 
 def default_backend() -> str:

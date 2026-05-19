@@ -9,6 +9,7 @@ from agenter.config import (
     default_backend,
     default_model,
     is_bedrock,
+    parse_backend_spec,
 )
 from agenter.data_models import ConfigurationError
 
@@ -56,9 +57,20 @@ class TestDefaultBackend:
         with patch.dict(os.environ, {"ACA_DEFAULT_BACKEND": "codex"}):
             assert default_backend() == "codex"
 
+    def test_acp_env_var_override(self):
+        with patch.dict(os.environ, {"ACA_DEFAULT_BACKEND": "acp"}):
+            assert default_backend() == "acp"
+
     def test_invalid_env_var_raises(self):
         with (
             patch.dict(os.environ, {"ACA_DEFAULT_BACKEND": "invalid"}),
             pytest.raises(ConfigurationError, match="Invalid ACA_DEFAULT_BACKEND"),
         ):
             default_backend()
+
+
+class TestParseBackendSpec:
+    """Test backend spec parsing."""
+
+    def test_accepts_acp_backend(self):
+        assert parse_backend_spec("agenter:acp") == ("agenter", "acp", None)

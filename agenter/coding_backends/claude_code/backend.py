@@ -123,6 +123,8 @@ class ClaudeCodeBackend(BaseBackend):
     def __init__(
         self,
         *,
+        model: str | None = None,
+        max_thinking_tokens: int | None = None,
         sandbox: bool | dict = True,
         allowed_tools: list[str] | None = None,
         setting_sources: list[str] | None = None,
@@ -131,6 +133,8 @@ class ClaudeCodeBackend(BaseBackend):
         """Initialize the backend.
 
         Args:
+            model: Optional Claude model to pass to Claude Code.
+            max_thinking_tokens: Optional thinking budget for Claude Code.
             sandbox: Enable Claude Code's native sandbox. Can be:
                 - True: Use default safe sandbox config
                 - dict: Custom sandbox config with keys like:
@@ -148,6 +152,8 @@ class ClaudeCodeBackend(BaseBackend):
             extra_tools: Custom tools to add. These are converted to SDK MCP tools
                 and registered as an in-process MCP server.
         """
+        self._configured_model = model
+        self._max_thinking_tokens = max_thinking_tokens
         self._sandbox = sandbox
 
         self._allowed_tools = allowed_tools or ["Read", "Edit", "Write", "Bash", "Glob"]
@@ -259,6 +265,10 @@ class ClaudeCodeBackend(BaseBackend):
             "cwd": str(self._cwd),
             "allowed_tools": self._allowed_tools,
         }
+        if self._configured_model:
+            options_kwargs["model"] = self._configured_model
+        if self._max_thinking_tokens is not None:
+            options_kwargs["max_thinking_tokens"] = self._max_thinking_tokens
 
         # Configure sandbox or bypass permissions
         if self._sandbox:

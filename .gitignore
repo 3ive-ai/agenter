@@ -26,6 +26,9 @@ dist/
 # Documentation build
 docs/_build/
 
+# Jupyter
+.ipynb_checkpoints/
+
 # --- Editor / OS ---
 .history/
 .DS_Store

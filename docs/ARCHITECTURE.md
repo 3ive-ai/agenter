@@ -9,7 +9,7 @@ The SDK follows a simple layered design pattern from top user-facing layers to b
 * **Adapters** (LangGraph, PydanticAI)
 * → **Facade** (AutonomousCodingAgent)
 * → **Runtime** (CodingSession)
-* → **Backends** (Anthropic, Claude Code, Codex, OpenHands).
+* → **Backends** (Anthropic, Claude Code, Codex, OpenHands, ACP).
 
 ---
 
@@ -39,12 +39,12 @@ The SDK follows a simple layered design pattern from top user-facing layers to b
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                           CodingBackend Protocol (Abstract)                             │
-├───────────────────────┬───────────────────────┬─────────────────────┬───────────────────┤
-│  AnthropicSDKBackend  │   ClaudeCodeBackend   │    CodexBackend     │ OpenHandsBackend  │
-│  (anthropic SDK)      │  (claude-code-sdk)    │  (openai-agents)    │  (openhands-sdk)  │
-└───────────────────────┴───────────────────────┴─────────────────────┴───────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    CodingBackend Protocol (Abstract)                                  │
+├───────────────────────┬───────────────────────┬─────────────────────┬───────────────────┬─────────────┤
+│  AnthropicSDKBackend  │   ClaudeCodeBackend   │    CodexBackend     │ OpenHandsBackend  │  ACPBackend │
+│  (anthropic SDK)      │  (claude-code-sdk)    │  (openai-agents)    │  (openhands-sdk)  │  (ACP CLI)  │
+└───────────────────────┴───────────────────────┴─────────────────────┴───────────────────┴─────────────┘
 ```
 
 ---
@@ -127,17 +127,19 @@ Abstract interfaces implemented for each distinct coding agent backend.
 | ClaudeCodeBackend | [`claude-code-sdk`](https://github.com/anthropics/claude-code-sdk-python) | Claude Code | Claude Code CLI | Battle-tested tools, AWS Bedrock, Google Vertex |
 | CodexBackend | [`openai-agents`](https://github.com/openai/openai-agents-python) | Codex MCP server | MCP over stdio | OpenAI models, custom MCP tools, sandbox modes |
 | OpenHandsBackend | [`openhands-sdk`](https://github.com/All-Hands-AI/OpenHands) | OpenHands agent | litellm | Any model, no sandbox (full access) |
+| ACPBackend | [`agent-client-protocol`](https://agentclientprotocol.github.io/python-sdk/) | Any ACP-compatible agent | JSON-RPC over stdio | Interoperability with ACP agents |
 
 **Which backend to use?**
 
 | Use Case and Scenario | Recommended Backend | Config |
 |----------|---------|--------|
 | Custom tools, full control | `AnthropicSDKBackend` | `backend="anthropic-sdk"` (default) |
-| Battle-tested Claude Code tools | `ClaudeCodeBackend` | `backend="claude-code"` |
+| Battle-tested Claude Code tools | `ClaudeCodeBackend` | `backend="claude-code", model="claude-sonnet-4-5-20250929", claude_max_thinking_tokens=8192` |
 | Need skills, slash commands, MCP | `ClaudeCodeBackend` | `backend="claude-code"` |
-| OpenAI models (o3, GPT-5-Codex) | `CodexBackend` | `backend="codex"` |
+| OpenAI models (o3, GPT-5-Codex) | `CodexBackend` | `backend="codex", model="gpt-5.4", codex_reasoning_effort="high"` |
 | Custom MCP tools with OpenAI | `CodexBackend` | `backend="codex", codex_mcp_servers=[...]` |
 | Any model via litellm | `OpenHandsBackend` | `backend="openhands", sandbox=False` |
+| Any ACP-compatible agent process | `ACPBackend` | `backend="acp", acp_command="codex-acp", acp_args=["-c", "model=\"gpt-5.4\"", "-c", "model_reasoning_effort=\"high\""]` |
 
 > **Note**: All backends default to `sandbox=True`. Use `sandbox=False` for unrestricted access.
 
@@ -185,6 +187,8 @@ from claude_code_sdk import query, ClaudeCodeOptions
 # Safe mode with native sandbox (default)
 options = ClaudeCodeOptions(
     cwd="/path/to/project",
+    model="claude-sonnet-4-5-20250929",
+    max_thinking_tokens=8192,
     allowed_tools=["Read", "Edit", "Write", "Bash", "Glob"],
     sandbox={"enabled": True, "autoAllowBashIfSandboxed": True},
     permission_mode="default",
@@ -226,6 +230,7 @@ result = await mcp_server.call_tool("codex", {
     "approval-policy": "never",
     "sandbox": "workspace-write",
     "model": "o3",
+    "config": {"model_reasoning_effort": "high"},
 })
 
 # Continue with codex-reply for subsequent messages
@@ -289,6 +294,33 @@ def _create_tools(self):
 ```
 
 **Note**: For tools that need dynamic state (such as `mas_code` that changes per call), use environment variables or temporary files to pass data to the subprocess.
+
+### ACP Backend (Implemented)
+
+```python
+agent = AutonomousCodingAgent(
+    backend="acp",
+    acp_command="codex-acp",
+    acp_args=["-c", 'model="gpt-5.4"', "-c", 'model_reasoning_effort="high"'],
+    acp_permission_policy="allow",
+)
+```
+
+**Key Abstractions**:
+- Spawns an ACP-compatible agent subprocess over stdio
+- Creates an ACP session with the request working directory
+- Sends prompts through `session/prompt`
+- Serves ACP client file reads and writes inside the request working directory
+- Adds Agenter's autonomous backend contract by default and auto-continues once
+  if an interactive ACP agent asks for confirmation instead of editing
+- Converts ACP session updates into Agenter backend messages
+- Tracks modified files by comparing workspace snapshots
+
+**When to use**:
+- You want to run an ACP-compatible agent through Agenter's validation and event model
+- You need an agent that already speaks ACP but does not have a native Agenter backend
+
+**Security note**: ACP agents are external processes. Agenter observes file changes after execution, but sandbox enforcement depends on the launched ACP agent and its own configuration.
 
 ### Abstraction Strategy
 
@@ -461,7 +493,7 @@ If any limit is exceeded, the session returns `BUDGET_EXCEEDED` status with an e
 ```text
 AutonomousCodingAgent
 ├── Backend Selection
-│   └── backend: "anthropic-sdk" | "claude-code" | "codex" | "openhands"
+│   └── backend: "anthropic-sdk" | "claude-code" | "codex" | "openhands" | "acp"
 ├── Security
 │   └── sandbox: bool = True  (unified sandbox control)
 ├── Backend-Specific (anthropic-sdk backend)
@@ -470,13 +502,22 @@ AutonomousCodingAgent
 │   └── use_anthropic_tools: bool  (use text_editor_20250728)
 ├── Backend-Specific (claude-code backend)
 │   ├── allowed_tools: ["Read", "Edit", "Write", "Bash", ...]
-│   └── setting_sources: ["project", "user"]
+│   ├── setting_sources: ["project", "user"]
+│   └── claude_max_thinking_tokens: int
 ├── Backend-Specific (codex backend)
 │   ├── codex_approval_policy: "never" | "on-request" | "on-failure" | "untrusted"
-│   └── codex_mcp_servers: list[CodexMCPServer]  (custom MCP tools)
+│   ├── codex_mcp_servers: list[CodexMCPServer]  (custom MCP tools)
+│   └── codex_reasoning_effort: "minimal" | "low" | "medium" | "high"
 ├── Backend-Specific (openhands backend)
 │   ├── model: str  (litellm format, e.g., "openai/gpt-4o")
 │   └── sandbox: False  (required - no sandbox support)
+├── Backend-Specific (acp backend)
+│   ├── acp_command: str
+│   ├── acp_args: list[str]
+│   ├── acp_env: dict[str, str]
+│   ├── acp_mcp_servers: list[Any]
+│   ├── acp_permission_policy: "deny" | "allow"
+│   └── acp_autonomous: bool
 ├── Safeguards
 │   ├── max_iterations: 5
 │   ├── max_tokens: 500_000
@@ -527,6 +568,7 @@ All backends default to `sandbox=True` for safe operation:
 | ClaudeCodeBackend | Native OS-level sandbox | `bypassPermissions` mode |
 | CodexBackend | `workspace-write` mode | `danger-full-access` mode |
 | OpenHandsBackend | Not supported (raises error) | Full filesystem access |
+| ACPBackend | Depends on launched ACP agent | Depends on launched ACP agent |
 
 ### Usage Examples
 

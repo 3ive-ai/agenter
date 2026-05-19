@@ -2,7 +2,7 @@
 
 **Decode your intent into working code.**
 
-Agenter is a backend-agnostic SDK for orchestrating autonomous AI coding agents. It provides a unified interface for working with multiple agent runtimes like Claude Code, Codex, and OpenHands.
+Agenter is a backend-agnostic SDK for orchestrating autonomous AI coding agents. It provides a unified interface for working with multiple agent runtimes like Claude Code, Codex, OpenHands, and ACP-compatible agents.
 
 ## Quick Start
 
@@ -37,6 +37,7 @@ pip install agenter
 # With specific backends
 pip install agenter[claude-code]
 pip install agenter[codex]
+pip install agenter[acp]
 
 # With framework adapters
 pip install agenter[adapters]

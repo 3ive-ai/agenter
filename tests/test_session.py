@@ -56,6 +56,20 @@ class TestCodingSessionPrepareFiles:
             assert "exists.py" in result
             assert "missing.py" not in result
 
+    def test_prepare_files_paths_only_skips_python_bytecode_cache(self, backend):
+        session = CodingSession(backend, validators=[])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir) / "__pycache__"
+            cache_dir.mkdir()
+            (cache_dir / "module.cpython-314.pyc").write_bytes(b"\x00\x01")
+            (Path(tmpdir) / "module.py").write_text("x = 1")
+
+            files = PathsModifiedFiles(file_paths=["module.py", "__pycache__/module.cpython-314.pyc"])
+            result = session._prepare_files_for_validation(files, tmpdir)
+
+            assert result == {"module.py": "x = 1"}
+
     def test_prepare_files_empty(self, backend):
         session = CodingSession(backend, validators=[])
 

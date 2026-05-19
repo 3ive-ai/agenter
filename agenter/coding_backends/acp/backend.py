@@ -25,13 +25,11 @@ from ...data_models import (
     Usage,
 )
 
-acp_schema: Any
-
-try:  # pragma: no cover - exercised with monkeypatch in tests when dependency is absent
+try:
     from acp import schema as acp_schema
     from acp import spawn_agent_process, text_block
-except ImportError:  # pragma: no cover - dependency is optional
-    acp_schema = None
+except ImportError:
+    acp_schema = None  # type: ignore[assignment]
     spawn_agent_process = None  # type: ignore[assignment]
     text_block = None  # type: ignore[assignment]
 

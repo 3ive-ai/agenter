@@ -60,12 +60,12 @@ The SDK is built on a robust `CodingBackend` abstraction protocol that decouples
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌───────────────────────────────────────────────────────────────────────────────────────┐
-│                           CodingBackend Protocol (Abstract)                           │
-├───────────────────────┬───────────────────────┬─────────────────────┬─────────────────┤
-│  AnthropicSDKBackend  │   ClaudeCodeBackend   │    CodexBackend     │ OpenHandsBackend│
-│  (Custom Tool Loop)   │  (Claude Code SDK)    │   (OpenAI Models)   │  (Any Model)    │
-└───────────────────────┴───────────────────────┴─────────────────────┴─────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                CodingBackend Protocol (Abstract)                                  │
+├───────────────────────┬───────────────────────┬─────────────────────┬─────────────────┬───────────┤
+│  AnthropicSDKBackend  │   ClaudeCodeBackend   │    CodexBackend     │ OpenHandsBackend│ ACPBackend│
+│  (Custom Tool Loop)   │  (Claude Code SDK)    │   (OpenAI Models)   │  (Any Model)    │ (ACP CLI) │
+└───────────────────────┴───────────────────────┴─────────────────────┴─────────────────┴───────────┘
 ```
 
 ## 📦 Installation

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 import re
 import sys
@@ -221,15 +220,11 @@ class ACPBackend:
         self._output_type = output_type
         self._system_prompt = system_prompt
         client = _AgenterACPClient(self)
-        spawn_kwargs: dict[str, Any] = {}
-        signature = inspect.signature(spawn_agent_process)
+        spawn_kwargs: dict[str, Any] = {
+            "transport_kwargs": {"limit": sys.maxsize}
+        }
         if self.env:
-            if "env" in signature.parameters:
-                spawn_kwargs["env"] = {**os.environ, **self.env}
-            else:
-                logger.warning("acp_env_ignored", reason="spawn_agent_process does not accept env")
-        if "transport_kwargs" in signature.parameters:
-            spawn_kwargs["transport_kwargs"] = {"limit": sys.maxsize}
+            spawn_kwargs["env"] = {**os.environ, **self.env}
 
         if self.sandbox:
             logger.warning("acp_sandbox_depends_on_agent", command=self.command)

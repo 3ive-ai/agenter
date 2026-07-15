@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -122,8 +122,8 @@ security = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = ">=0.9.0,<1.0.0" },
-    { name = "agent-client-protocol", marker = "extra == 'all-backends'", specifier = ">=0.9.0,<1.0.0" },
+    { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = ">=0.10.0,<1.0.0" },
+    { name = "agent-client-protocol", marker = "extra == 'all-backends'", specifier = ">=0.10.0,<1.0.0" },
     { name = "anthropic", extras = ["bedrock"], specifier = ">=0.40.0" },
     { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.0" },
     { name = "claude-agent-sdk", marker = "extra == 'all-backends'", specifier = ">=0.1.0" },

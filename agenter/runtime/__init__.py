@@ -9,7 +9,15 @@ This module contains the core execution machinery:
 
 from .budget import BudgetMeter
 from .display import ConsoleDisplay
+from .persistent_session import PersistentCodingSession
 from .session import CodingSession
 from .tracer import FileTracer, Tracer
 
-__all__ = ["BudgetMeter", "CodingSession", "ConsoleDisplay", "FileTracer", "Tracer"]
+__all__ = [
+    "BudgetMeter",
+    "CodingSession",
+    "ConsoleDisplay",
+    "FileTracer",
+    "PersistentCodingSession",
+    "Tracer",
+]

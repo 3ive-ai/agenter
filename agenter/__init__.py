@@ -44,7 +44,7 @@ from .data_models import (
 from .file_system import FileOperations, PathResolver
 from .logging import configure_logging
 from .post_validators.syntax import SyntaxValidator
-from .runtime import BudgetMeter, FileTracer, Tracer
+from .runtime import BudgetMeter, FileTracer, PersistentCodingSession, Tracer
 from .tools import FunctionTool, Tool, tool
 
 __all__ = [
@@ -65,6 +65,7 @@ __all__ = [
     "FunctionTool",
     "PathResolver",
     "PathSecurityError",
+    "PersistentCodingSession",
     "SyntaxValidator",
     "Tool",
     "ToolError",

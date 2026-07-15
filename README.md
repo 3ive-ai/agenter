@@ -174,6 +174,40 @@ ACP prompts run with Agenter's autonomous backend contract by default, so
 interactive agents do not pause for routine implementation confirmation. Set
 `acp_autonomous=False` if you want the raw ACP agent behavior.
 
+### Persistent ACP Follow-ups
+
+Use `open_session()` when an ACP coding agent should retain its own conversation
+state across multiple prompts instead of receiving one large generated program:
+
+```python
+from agenter import AutonomousCodingAgent, Budget
+
+agent = AutonomousCodingAgent(
+    backend="acp",
+    acp_command="codex-acp",
+    acp_permission_policy="allow",
+)
+session = await agent.open_session(
+    cwd="./workspace",
+    session_budget=Budget(max_iterations=40, max_tokens=200_000),
+)
+try:
+    first = await session.execute("Inspect the GLB and implement the extraction script.")
+    followup = await session.execute("Run it, inspect the render, and fix the wall contacts.")
+    print(session.session_id, followup.request_index, session.modified_files().paths())
+finally:
+    await session.close()
+```
+
+Follow-ups are serialized onto one ACP subprocess and `session/prompt` session.
+Each result reports request-local files and usage plus stable `session_id`,
+`request_index`, and cumulative session totals. `session.modified_files()` and
+`session.usage()` expose cumulative state. Active prompts can be cancelled with
+`session.cancel()` without discarding the session. Pass `resume_session_id` to
+`open_session()` when the ACP agent advertises `session/resume` or legacy
+`session/load` support. Check `result.usage_reported` (or
+`session.usage().reported`) because some ACP adapters do not publish token usage.
+
 | Backend | SDK | Providers | Sandbox |
 |---------|-----|-----------|---------|
 | **anthropic-sdk** | Anthropic SDK with custom tool loop | Anthropic API, AWS Bedrock | `PathResolver` path isolation |

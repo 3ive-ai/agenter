@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import re
@@ -174,6 +175,11 @@ class ACPBackend:
         self._pending_updates: list[Any] = []
         self._file_snapshot: dict[str, tuple[int, int]] = {}
         self._modified_paths: list[str] = []
+        self._request_snapshot: dict[str, tuple[int, int]] | None = None
+        self._request_modified_paths: list[str] = []
+        self._turn_modified_paths: list[str] = []
+        self._execute_lock = asyncio.Lock()
+        self._prompt_active = False
         self._output_type: type[BaseModel] | None = None
         self._structured_output: BaseModel | None = None
         self._refusal: RefusalMessage | None = None
@@ -181,6 +187,7 @@ class ACPBackend:
         self._input_tokens = 0
         self._output_tokens = 0
         self._cost_usd = 0.0
+        self._usage_reported = False
 
     async def connect(
         self,
@@ -190,12 +197,15 @@ class ACPBackend:
         output_type: type[BaseModel] | None = None,
         system_prompt: str | None = None,
     ) -> None:
-        """Spawn the ACP agent process and create a session."""
+        """Spawn the ACP agent process and create or resume a session."""
         if spawn_agent_process is None:
             raise BackendError(
                 "agent-client-protocol is required for ACPBackend. Install with: pip install agenter[acp]",
                 backend="acp",
             )
+
+        if self._connection is not None:
+            raise BackendError("ACPBackend is already connected.", backend="acp")
 
         self._cwd = Path(cwd).resolve()
         if output_type is not None:
@@ -217,43 +227,92 @@ class ACPBackend:
         spawn: Any = spawn_agent_process
         self._process_context = spawn(client, self.command, *self.args, **spawn_kwargs)
         self._connection, self._process = await self._process_context.__aenter__()
-        await self._connection.initialize(protocol_version=1)
-        session = await self._connection.new_session(cwd=str(self._cwd), mcp_servers=self.mcp_servers)
-        self._session_id = self._extract_session_id(session)
+        initialization = await self._connection.initialize(protocol_version=1)
+        if resume_session_id is None:
+            session = await self._connection.new_session(cwd=str(self._cwd), mcp_servers=self.mcp_servers)
+            self._session_id = self._extract_session_id(session)
+        elif self._supports_resume(initialization):
+            await self._connection.resume_session(
+                cwd=str(self._cwd),
+                session_id=resume_session_id,
+                mcp_servers=self.mcp_servers,
+            )
+            self._session_id = resume_session_id
+        elif self._supports_load(initialization):
+            await self._connection.load_session(
+                cwd=str(self._cwd),
+                session_id=resume_session_id,
+                mcp_servers=self.mcp_servers,
+            )
+            self._session_id = resume_session_id
+        else:
+            await self.disconnect()
+            raise BackendError(
+                "The ACP agent does not advertise session/resume or session/load support.",
+                backend="acp",
+            )
         self._file_snapshot = self._snapshot_files()
+        self._request_snapshot = self._file_snapshot
+
+    @property
+    def session_id(self) -> str | None:
+        """The live ACP session identifier, if connected."""
+        return self._session_id
+
+    @property
+    def prompt_active(self) -> bool:
+        """Whether an ACP prompt is currently running."""
+        return self._prompt_active
+
+    def begin_request(self) -> None:
+        """Start request-local file tracking without resetting session state."""
+        snapshot = self._snapshot_files()
+        self._request_snapshot = snapshot
+        self._request_modified_paths = []
+        self._turn_modified_paths = []
 
     async def execute(self, prompt: str) -> AsyncIterator[BackendMessage]:
         """Execute a prompt through the connected ACP agent."""
-        if self._connection is None or self._session_id is None:
-            raise BackendError("ACPBackend is not connected. Call connect() before execute().", backend="acp")
-        self._refusal = None
-        session_start_snapshot = self._file_snapshot
-        turn_start_snapshot = self._snapshot_files()
+        async with self._execute_lock:
+            if self._connection is None or self._session_id is None:
+                raise BackendError("ACPBackend is not connected. Call connect() before execute().", backend="acp")
+            self._prompt_active = True
+            try:
+                self._refusal = None
+                session_start_snapshot = self._file_snapshot
+                request_start_snapshot = self._request_snapshot or session_start_snapshot
+                turn_start_snapshot = self._snapshot_files()
 
-        updates, after_snapshot = await self._send_prompt(self._format_prompt(prompt))
-        turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
-        modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
-        all_updates = list(updates)
-        update_batches = [list(updates)]
+                updates, after_snapshot = await self._send_prompt(self._format_prompt(prompt))
+                turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
+                modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
+                request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
+                all_updates = list(updates)
+                update_batches = [list(updates)]
 
-        if self.autonomous and not turn_modified_paths and self._looks_like_confirmation_request(updates):
-            logger.info("acp_auto_continuing_confirmation_request")
-            continuation_updates, after_snapshot = await self._send_prompt(ACP_AUTONOMOUS_CONTINUE_PROMPT)
-            update_batches.append(list(continuation_updates))
-            all_updates.extend(continuation_updates)
-            turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
-            modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
-            if not turn_modified_paths and self._looks_like_confirmation_request(all_updates):
-                self._refusal = RefusalMessage(
-                    reason="ACP agent asked for confirmation instead of modifying files.",
-                    category="capability",
-                )
+                if self.autonomous and not turn_modified_paths and self._looks_like_confirmation_request(updates):
+                    logger.info("acp_auto_continuing_confirmation_request")
+                    continuation_updates, after_snapshot = await self._send_prompt(ACP_AUTONOMOUS_CONTINUE_PROMPT)
+                    update_batches.append(list(continuation_updates))
+                    all_updates.extend(continuation_updates)
+                    turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
+                    modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
+                    request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
+                    if not turn_modified_paths and self._looks_like_confirmation_request(all_updates):
+                        self._refusal = RefusalMessage(
+                            reason="ACP agent asked for confirmation instead of modifying files.",
+                            category="capability",
+                        )
 
-        self._modified_paths = modified_paths
+                self._turn_modified_paths = turn_modified_paths
+                self._request_modified_paths = request_modified_paths
+                self._modified_paths = modified_paths
 
-        for updates_batch in update_batches:
-            for message in self._map_updates(updates_batch):
-                yield message
+                for updates_batch in update_batches:
+                    for message in self._map_updates(updates_batch):
+                        yield message
+            finally:
+                self._prompt_active = False
 
     async def _send_prompt(self, prompt: str) -> tuple[list[Any], dict[str, tuple[int, int]]]:
         self._pending_updates = []
@@ -286,8 +345,38 @@ class ACPBackend:
             raise BackendError("ACP session/new response did not include a session ID.", backend="acp")
         return str(value)
 
+    def _supports_resume(self, initialization: Any) -> bool:
+        data = self._to_plain_data(initialization)
+        if not isinstance(data, dict):
+            return False
+        capabilities = data.get("agentCapabilities") or data.get("agent_capabilities")
+        if not isinstance(capabilities, dict):
+            return False
+        session_capabilities = capabilities.get("sessionCapabilities") or capabilities.get("session_capabilities")
+        if not isinstance(session_capabilities, dict):
+            return False
+        return session_capabilities.get("resume") is not None
+
+    def _supports_load(self, initialization: Any) -> bool:
+        data = self._to_plain_data(initialization)
+        if not isinstance(data, dict):
+            return False
+        capabilities = data.get("agentCapabilities") or data.get("agent_capabilities")
+        if not isinstance(capabilities, dict):
+            return False
+        return bool(capabilities.get("loadSession") or capabilities.get("load_session"))
+
     def modified_files(self) -> PathsModifiedFiles:
+        """Return cumulative file changes since connect()."""
         return PathsModifiedFiles(file_paths=self._modified_paths)
+
+    def request_modified_files(self) -> PathsModifiedFiles:
+        """Return file changes made by the current high-level request."""
+        return PathsModifiedFiles(file_paths=self._request_modified_paths)
+
+    def turn_modified_files(self) -> PathsModifiedFiles:
+        """Return file changes made by the most recent ACP prompt."""
+        return PathsModifiedFiles(file_paths=self._turn_modified_paths)
 
     def usage(self) -> Usage:
         return Usage(
@@ -295,6 +384,7 @@ class ACPBackend:
             output_tokens=self._output_tokens,
             cost_usd=self._cost_usd,
             provider="acp",
+            reported=self._usage_reported,
         )
 
     def structured_output(self) -> BaseModel | None:
@@ -302,6 +392,14 @@ class ACPBackend:
 
     def refusal(self) -> RefusalMessage | None:
         return self._refusal
+
+    async def cancel(self) -> None:
+        """Cancel the active ACP prompt while keeping the session reusable."""
+        if self._connection is None or self._session_id is None:
+            raise BackendError("ACPBackend is not connected. Call connect() before cancel().", backend="acp")
+        if not self._prompt_active:
+            return
+        await self._connection.cancel(session_id=self._session_id)
 
     async def disconnect(self) -> None:
         """Close the ACP process context."""
@@ -317,9 +415,14 @@ class ACPBackend:
         self._pending_updates = []
         self._file_snapshot = {}
         self._modified_paths = []
+        self._request_snapshot = None
+        self._request_modified_paths = []
+        self._turn_modified_paths = []
+        self._prompt_active = False
         self._input_tokens = 0
         self._output_tokens = 0
         self._cost_usd = 0.0
+        self._usage_reported = False
 
     def _snapshot_files(self) -> dict[str, tuple[int, int]]:
         if self._cwd is None or not self._cwd.exists():
@@ -541,6 +644,7 @@ class ACPBackend:
         used = data.get("used")
         if not isinstance(used, dict):
             return
+        self._usage_reported = True
         # ACP usage_update reports cumulative session totals, not per-turn deltas.
         # Assignment (not +=) is correct: the last update already includes all prior usage.
         self._input_tokens = self._usage_int(used, "inputTokens", "input_tokens")

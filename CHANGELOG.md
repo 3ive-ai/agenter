@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Persistent ACP sessions through `AutonomousCodingAgent.open_session()` with serialized follow-ups
+- Stable ACP session/request trace identifiers and per-request plus cumulative usage metadata
+- Explicit usage availability so an ACP adapter's missing metrics are not mistaken for measured zero usage
+- ACP `session/resume` support with legacy `session/load` fallback
+- Active ACP prompt cancellation without discarding the persistent session
+
+### Changed
+- Split backend connection lifetime from individual `CodingSession` requests while preserving one-shot `execute()` behavior
+- Track ACP file changes separately for the latest turn, high-level request, and full session
+
 ## [0.1.2] - 2026-03-24
 
 ### Added

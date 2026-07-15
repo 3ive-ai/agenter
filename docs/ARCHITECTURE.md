@@ -314,11 +314,16 @@ agent = AutonomousCodingAgent(
 - Adds Agenter's autonomous backend contract by default and auto-continues once
   if an interactive ACP agent asks for confirmation instead of editing
 - Converts ACP session updates into Agenter backend messages
-- Tracks modified files by comparing workspace snapshots
+- Tracks turn-local, request-local, and cumulative modified files by comparing workspace snapshots
+- Supports persistent, serialized follow-ups through `AutonomousCodingAgent.open_session()`
+- Exposes stable ACP session IDs on persistent events and results
+- Uses `session/resume` with a `session/load` fallback when the agent advertises support
+- Cancels an active prompt without closing the persistent session
 
 **When to use**:
 - You want to run an ACP-compatible agent through Agenter's validation and event model
 - You need an agent that already speaks ACP but does not have a native Agenter backend
+- You want a coding subagent to keep its internal context across several orchestrator turns
 
 **Security note**: ACP agents are external processes. Agenter observes file changes after execution, but sandbox enforcement depends on the launched ACP agent and its own configuration.
 

@@ -79,6 +79,7 @@ class TaskCompleted(BaseModel):
     total_tokens: int
     cost_usd: float
     duration_seconds: float
+    usage_reported: bool | None = None
     output: Any | None = None
 
 
@@ -92,6 +93,7 @@ class TaskFailed(BaseModel):
     total_tokens: int
     cost_usd: float
     duration_seconds: float
+    usage_reported: bool | None = None
     limit_type: str | None = None
     limit_value: float | int | None = None
     actual_value: float | int | None = None
@@ -107,6 +109,7 @@ class SessionEnded(BaseModel):
     total_tokens: int
     cost_usd: float
     duration_seconds: float
+    usage_reported: bool | None = None
 
 
 # Union type for type hints

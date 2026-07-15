@@ -23,7 +23,7 @@ from .post_validators.syntax import SyntaxValidator
 from .runtime import CodingSession, ConsoleDisplay, PersistentCodingSession, Tracer
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from .coding_backends.codex import CodexBackend, CodexMCPServer
     from .post_validators.protocol import Validator
@@ -86,6 +86,7 @@ class AutonomousCodingAgent:
         acp_mcp_servers: list[Any] | None = None,
         acp_permission_policy: str = "deny",
         acp_autonomous: bool = True,
+        acp_update_callback: Callable[[Any], None] | None = None,
     ):
         """Initialize the agent.
 
@@ -133,6 +134,8 @@ class AutonomousCodingAgent:
             acp_autonomous: Add Agenter's autonomous backend contract to ACP prompts
                 and auto-continue once when an ACP agent asks for confirmation.
                 Defaults to True.
+            acp_update_callback: Optional synchronous callback invoked for each raw ACP
+                session update as it arrives (acp only).
         """
         if backend is None:
             backend = default_backend()
@@ -170,6 +173,7 @@ class AutonomousCodingAgent:
         self._acp_mcp_servers = acp_mcp_servers
         self._acp_permission_policy = acp_permission_policy
         self._acp_autonomous = acp_autonomous
+        self._acp_update_callback = acp_update_callback
 
         if backend == BACKEND_CLAUDE_CODE and use_anthropic_tools:
             logger.warning(
@@ -202,11 +206,12 @@ class AutonomousCodingAgent:
             or acp_mcp_servers
             or acp_permission_policy != "deny"
             or not acp_autonomous
+            or acp_update_callback is not None
         )
         if backend != BACKEND_ACP and acp_opts_set:
             logger.warning(
                 "acp_command, acp_args, acp_env, acp_mcp_servers, acp_permission_policy, "
-                "and acp_autonomous are only used with acp backend."
+                "acp_autonomous, and acp_update_callback are only used with acp backend."
             )
 
         if backend == BACKEND_OPENHANDS:
@@ -404,6 +409,7 @@ class AutonomousCodingAgent:
                 sandbox=self._sandbox,
                 permission_policy=self._acp_permission_policy,
                 autonomous=self._acp_autonomous,
+                update_callback=self._acp_update_callback,
             )
         elif self._backend_type == BACKEND_OPENHANDS:
             from .coding_backends.openhands import OpenHandsBackend

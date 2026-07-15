@@ -37,7 +37,7 @@ except ImportError:
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 
 ACP_AUTONOMOUS_CONTRACT = """You are being called as a backend by Agenter.
@@ -97,6 +97,11 @@ class _AgenterACPClient:
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
         """Capture streamed session updates for execute() to emit."""
         self._backend._pending_updates.append(update)
+        if self._backend.update_callback is not None:
+            try:
+                self._backend.update_callback(update)
+            except Exception:
+                logger.exception("acp_update_callback_failed")
 
     async def write_text_file(self, content: str, path: str, session_id: str, **kwargs: Any) -> Any:
         """Write text into the connected workspace on behalf of the ACP agent."""
@@ -152,6 +157,7 @@ class ACPBackend:
         sandbox: bool = True,
         permission_policy: str = "deny",
         autonomous: bool = True,
+        update_callback: Callable[[Any], None] | None = None,
     ) -> None:
         if permission_policy not in {"deny", "allow"}:
             raise ConfigurationError(
@@ -167,6 +173,7 @@ class ACPBackend:
         self.sandbox = sandbox
         self.permission_policy = permission_policy
         self.autonomous = autonomous
+        self.update_callback = update_callback
         self._cwd: Path | None = None
         self._connection: Any = None
         self._process_context: Any = None

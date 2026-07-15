@@ -69,6 +69,23 @@ class TestACPBackendFacade:
         assert isinstance(backend, ACPBackend)
         assert backend.autonomous is False
 
+    def test_agent_facade_passes_live_acp_update_callback(self) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+
+        def callback(_update):
+            return None
+
+        agent = AutonomousCodingAgent(
+            backend="acp",
+            acp_command="fake-acp-agent",
+            acp_update_callback=callback,
+        )
+
+        backend = agent._create_backend()
+
+        assert isinstance(backend, ACPBackend)
+        assert backend.update_callback is callback
+
 
 class FakeACPProcessContext:
     """Async context manager returned by fake spawn_agent_process."""
@@ -130,6 +147,39 @@ class TestACPBackendLifecycle:
         with pytest.raises(BackendError, match="not connected"):
             async for _ in backend.execute("hello"):
                 pass
+
+    @pytest.mark.asyncio
+    async def test_update_callback_runs_before_prompt_finishes(self, tmp_path, monkeypatch) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+        from agenter.coding_backends.acp import backend as acp_backend_module
+
+        observed = []
+
+        async def prompt_side_effect(session_id, prompt):
+            update = {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "Inspect files"}
+            await spawned["client"].session_update(session_id, update)
+            assert observed == [update]
+            return SimpleNamespace(stop_reason="end_turn")
+
+        connection = SimpleNamespace(
+            initialize=AsyncMock(),
+            new_session=AsyncMock(return_value=SimpleNamespace(session_id="session-1")),
+            prompt=AsyncMock(side_effect=prompt_side_effect),
+        )
+        context = FakeACPProcessContext(connection)
+        spawned = {}
+
+        def fake_spawn(client, *args, **kwargs):
+            spawned["client"] = client
+            return context
+
+        monkeypatch.setattr(acp_backend_module, "spawn_agent_process", fake_spawn, raising=False)
+        backend = ACPBackend(command="fake-acp-agent", update_callback=observed.append)
+        await backend.connect(str(tmp_path))
+
+        _ = [message async for message in backend.execute("inspect")]
+
+        assert observed[0]["toolCallId"] == "call-1"
 
     @pytest.mark.asyncio
     async def test_disconnect_exits_process_context(self, monkeypatch) -> None:

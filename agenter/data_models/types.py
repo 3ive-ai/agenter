@@ -207,10 +207,16 @@ class CodingResult(BaseModel):
     total_output_tokens: int = 0
     total_cost_usd: float = 0.0
     total_duration_seconds: float = 0.0
+    usage_reported: bool | None = None  # False when the backend did not emit usage
     exceeded_limit: str | None = None  # Which limit was exceeded (max_iterations, max_tokens, etc.)
     exceeded_values: dict[str, float | int] | None = None  # {limit_value: X, actual_value: Y}
     output: BaseModel | None = None  # Typed structured output
     trace_dir: Path | None = None  # Directory where traces were saved (if tracer was used)
+    session_id: str | None = None  # Backend session shared by persistent follow-ups
+    request_index: int | None = None  # 1-based request number within a persistent session
+    session_total_tokens: int | None = None  # Cumulative usage across persistent requests
+    session_total_cost_usd: float | None = None
+    session_total_duration_seconds: float | None = None
 
     def _repr_markdown_(self) -> str:
         """Jupyter notebook rich display."""
@@ -230,6 +236,8 @@ class CodingEvent(BaseModel):
     data: EventData | None = None
     message: BackendMessage | None = None  # Typed message for BACKEND_MESSAGE events
     result: CodingResult | None = None  # Final result for terminal events (COMPLETED, FAILED)
+    session_id: str | None = None  # Backend session shared by persistent follow-ups
+    request_index: int | None = None  # 1-based request number within a persistent session
     timestamp: float = Field(default_factory=time.time)
 
 

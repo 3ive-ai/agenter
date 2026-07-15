@@ -19,6 +19,8 @@ class Usage(BaseModel):
         cost_usd: Estimated cost in USD.
         model: Model identifier used (e.g., "claude-sonnet-4-20250514").
         provider: Provider/backend type ("anthropic-sdk", "bedrock", "claude-code").
+        reported: Whether the backend actually supplied these usage values. A
+            false value distinguishes unavailable usage from measured zero usage.
     """
 
     input_tokens: int = 0
@@ -26,6 +28,7 @@ class Usage(BaseModel):
     cost_usd: float = 0.0
     model: str | None = None
     provider: str | None = None
+    reported: bool = True
 
     @property
     def total_tokens(self) -> int:

@@ -10,6 +10,7 @@ import structlog
 
 from ..coding_backends.retry import build_retry_prompt
 from ..data_models import (
+    BackendError,
     BackendMessage,
     Budget,
     BudgetLimitType,
@@ -72,11 +73,57 @@ class CodingSession:
         self._validator_chain = ValidatorChain(validators)
         self.display = display
         self.tracer = tracer
+        self._connected = False
+        self._cwd: Path | None = None
 
     @property
     def validators(self) -> Sequence[Validator]:
         """Access validators via chain for backwards compatibility."""
         return self._validator_chain.validators
+
+    @property
+    def is_connected(self) -> bool:
+        """Whether the backend connection is currently open."""
+        return self._connected
+
+    async def connect(
+        self,
+        request: CodingRequest,
+        resume_session_id: str | None = None,
+    ) -> None:
+        """Open the backend connection without executing a request."""
+        if self._connected:
+            raise BackendError("CodingSession is already connected.")
+        await self.backend.connect(
+            request.cwd,
+            request.allowed_write_paths,
+            resume_session_id=resume_session_id,
+            output_type=request.output_type,
+            system_prompt=request.system_prompt,
+        )
+        self._connected = True
+        self._cwd = Path(request.cwd).resolve()
+
+    async def disconnect(self) -> None:
+        """Close the backend connection, shielding cleanup from cancellation."""
+        if not self._connected:
+            return
+        try:
+            await asyncio.shield(self.backend.disconnect())
+        except asyncio.CancelledError:
+            # MCP backends may raise during cleanup because their anyio cancel
+            # scope was created in a different task.
+            pass
+        finally:
+            self._connected = False
+            self._cwd = None
+
+    def _request_modified_files(self) -> ModifiedFiles:
+        """Return request-local changes when the backend exposes them."""
+        request_modified_files = getattr(self.backend, "request_modified_files", None)
+        if request_modified_files is not None:
+            return request_modified_files()
+        return self.backend.modified_files()
 
     def _get_budget(self, request: CodingRequest) -> Budget:
         """Get budget from request, using max_iterations fallback."""
@@ -208,16 +255,28 @@ class CodingSession:
             CodingResult with status, files, and metrics. If output_type was
             specified in the request, result.output contains the structured output.
         """
-        # Consume all events and return final result
-        result = None
+        return await self._consume_result(self.stream_run(request), request, raise_on_budget_exceeded)
 
-        async for event in self.stream_run(request):
-            # Terminal events (COMPLETED, FAILED) carry the result directly
+    async def run_request(
+        self,
+        request: CodingRequest,
+        raise_on_budget_exceeded: bool = False,
+    ) -> CodingResult:
+        """Execute one request on an already-connected backend."""
+        return await self._consume_result(self.stream_request(request), request, raise_on_budget_exceeded)
+
+    async def _consume_result(
+        self,
+        events: AsyncIterator[CodingEvent],
+        request: CodingRequest,
+        raise_on_budget_exceeded: bool,
+    ) -> CodingResult:
+        result = None
+        async for event in events:
             if event.result is not None:
                 result = event.result
 
         if result is None:
-            # Should not happen, but handle gracefully
             result = CodingResult(
                 status=CodingStatus.FAILED,
                 files={},
@@ -227,11 +286,9 @@ class CodingSession:
                 trace_dir=self.tracer.output_dir if self.tracer else None,
             )
 
-        # Optionally raise exception for budget exceeded
         if raise_on_budget_exceeded and result.status == CodingStatus.BUDGET_EXCEEDED:
             from ..data_models import BudgetExceededError
 
-            # Use values from result (populated from event data)
             if result.exceeded_limit and result.exceeded_values:
                 raise BudgetExceededError(
                     result.summary,
@@ -240,7 +297,6 @@ class CodingSession:
                     actual_value=result.exceeded_values["actual_value"],
                 )
 
-            # Fallback for edge cases (should be rare)
             budget = self._get_budget(request)
             raise BudgetExceededError(
                 result.summary,
@@ -255,7 +311,19 @@ class CodingSession:
         self,
         request: CodingRequest,
     ) -> AsyncIterator[CodingEvent]:
-        """Run the coding session, yielding events.
+        """Run one request with an automatically managed backend connection."""
+        await self.connect(request)
+        try:
+            async for event in self.stream_request(request):
+                yield event
+        finally:
+            await self.disconnect()
+
+    async def stream_request(
+        self,
+        request: CodingRequest,
+    ) -> AsyncIterator[CodingEvent]:
+        """Run one request on an already-connected backend, yielding events.
 
         Args:
             request: The coding task request
@@ -263,17 +331,22 @@ class CodingSession:
         Yields:
             CodingEvent for each significant step
         """
+        if not self._connected or self._cwd is None:
+            raise BackendError("CodingSession is not connected. Call connect() before run_request().")
+        if Path(request.cwd).resolve() != self._cwd:
+            raise BackendError(
+                f"Persistent session cwd cannot change from {self._cwd} to {Path(request.cwd).resolve()}."
+            )
+
+        begin_request = getattr(self.backend, "begin_request", None)
+        if begin_request is not None:
+            begin_request()
+
         budget = self._get_budget(request)
         tracker = BudgetMeter(budget)
-        prev_tokens = 0
-        prev_cost = 0.0
-
-        await self.backend.connect(
-            request.cwd,
-            request.allowed_write_paths,
-            output_type=request.output_type,
-            system_prompt=request.system_prompt,
-        )
+        starting_usage = self.backend.usage()
+        prev_tokens = starting_usage.total_tokens
+        prev_cost = starting_usage.cost_usd
         prompt = request.prompt
         logger.debug("session_started", cwd=str(request.cwd))
 
@@ -323,16 +396,17 @@ class CodingSession:
                             actual_value = tracker.iterations
 
                     # Prepare files with actual content (not empty strings)
-                    file_changes = self.backend.modified_files()
+                    file_changes = self._request_modified_files()
                     result_files = self._prepare_files_for_validation(file_changes, request.cwd)
                     budget_failed_result = CodingResult(
                         status=CodingStatus.BUDGET_EXCEEDED,
                         files=result_files,
                         summary=f"Budget exceeded: {limit_type} ({actual_value} >= {limit_value})",
                         iterations=tracker.iterations,
-                        total_tokens=self.backend.usage().total_tokens,
+                        total_tokens=tracker.tokens_used,
                         total_cost_usd=usage["cost_usd"],
                         total_duration_seconds=usage["elapsed_seconds"],
+                        usage_reported=self.backend.usage().reported,
                         exceeded_limit=limit_type,
                         exceeded_values={"limit_value": limit_value, "actual_value": actual_value},
                         trace_dir=self.tracer.output_dir if self.tracer else None,
@@ -344,9 +418,10 @@ class CodingSession:
                             files=result_files,
                             summary=f"Budget exceeded: {limit_type} ({actual_value} >= {limit_value})",
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                             limit_type=limit_type,
                             limit_value=limit_value,
                             actual_value=actual_value,
@@ -359,9 +434,10 @@ class CodingSession:
                         data=SessionEnded(
                             status="budget_exceeded",
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                         ),
                     )
                     return
@@ -433,7 +509,7 @@ class CodingSession:
                 if refusal is not None:
                     logger.info("llm_refused_request", reason=refusal.reason, category=refusal.category)
                     usage = tracker.usage()
-                    file_changes = self.backend.modified_files()
+                    file_changes = self._request_modified_files()
                     result_files = self._prepare_files_for_validation(file_changes, request.cwd)
 
                     refused_result = CodingResult(
@@ -441,9 +517,10 @@ class CodingSession:
                         files=result_files,
                         summary=f"LLM refused: {refusal.reason}",
                         iterations=tracker.iterations,
-                        total_tokens=self.backend.usage().total_tokens,
+                        total_tokens=tracker.tokens_used,
                         total_cost_usd=usage["cost_usd"],
                         total_duration_seconds=usage["elapsed_seconds"],
+                        usage_reported=self.backend.usage().reported,
                         trace_dir=self.tracer.output_dir if self.tracer else None,
                     )
                     yield CodingEvent(
@@ -461,9 +538,10 @@ class CodingSession:
                             files=result_files,
                             summary=f"LLM refused: {refusal.reason}",
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                             refusal_reason=refusal.reason,
                             refusal_category=refusal.category,
                         ),
@@ -474,14 +552,15 @@ class CodingSession:
                         data=SessionEnded(
                             status="refused",
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                         ),
                     )
                     return
 
-                file_changes = self.backend.modified_files()
+                file_changes = self._request_modified_files()
 
                 # Prepare files for validation (read from disk if paths_only)
                 files_for_validation = self._prepare_files_for_validation(file_changes, request.cwd)
@@ -557,7 +636,7 @@ class CodingSession:
                         self.display.display_summary(
                             success=True,
                             iterations=tracker.iterations,
-                            tokens=self.backend.usage().total_tokens,
+                            tokens=tracker.tokens_used,
                             files=result_files,
                         )
 
@@ -571,9 +650,10 @@ class CodingSession:
                         files=result_files,
                         summary=summary,
                         iterations=tracker.iterations,
-                        total_tokens=self.backend.usage().total_tokens,
+                        total_tokens=tracker.tokens_used,
                         total_cost_usd=usage["cost_usd"],
                         total_duration_seconds=usage["elapsed_seconds"],
+                        usage_reported=self.backend.usage().reported,
                         output=structured_output,
                         trace_dir=self.tracer.output_dir if self.tracer else None,
                     )
@@ -584,9 +664,10 @@ class CodingSession:
                             files=result_files,
                             summary=summary,
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                             output=structured_output,
                         ),
                         result=completed_result,
@@ -597,9 +678,10 @@ class CodingSession:
                         data=SessionEnded(
                             status=session_status,
                             iterations=tracker.iterations,
-                            total_tokens=self.backend.usage().total_tokens,
+                            total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],
                             duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
                         ),
                     )
                     return
@@ -619,11 +701,4 @@ class CodingSession:
             # This point is never reached due to budget check
 
         finally:
-            # Shield cleanup from cancellation to ensure resources are freed
-            # Catch CancelledError from anyio cancel scope mismatches in MCP backends
-            try:  # noqa: SIM105 - can't use contextlib.suppress with await
-                await asyncio.shield(self.backend.disconnect())
-            except asyncio.CancelledError:
-                # MCP backends may raise CancelledError during cleanup due to
-                # anyio cancel scope task mismatches - this is expected in pytest
-                pass
+            logger.debug("request_ended", cwd=str(request.cwd))

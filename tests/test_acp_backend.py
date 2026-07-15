@@ -354,6 +354,7 @@ class TestACPBackendExecution:
         assert backend.usage().input_tokens == 11
         assert backend.usage().output_tokens == 7
         assert backend.usage().cost_usd == 0.002
+        assert backend.usage().reported is True
 
     @pytest.mark.asyncio
     async def test_execute_adds_autonomous_contract_to_prompt_by_default(self, tmp_path, monkeypatch) -> None:

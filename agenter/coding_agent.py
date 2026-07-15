@@ -17,10 +17,10 @@ from .config import (
     BACKEND_OPENHANDS,
     default_backend,
 )
-from .data_models import CodingEvent, CodingRequest, CodingResult, Verbosity
+from .data_models import Budget, CodingEvent, CodingRequest, CodingResult, Verbosity
 from .logging import configure_logging
 from .post_validators.syntax import SyntaxValidator
-from .runtime import CodingSession, ConsoleDisplay, Tracer
+from .runtime import CodingSession, ConsoleDisplay, PersistentCodingSession, Tracer
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -259,6 +259,57 @@ class AutonomousCodingAgent:
 
         backend = self._create_backend()
         return CodingSession(backend, self._validators, display=display, tracer=self._tracer)
+
+    async def open_session(
+        self,
+        cwd: str,
+        *,
+        allowed_write_paths: list[str] | None = None,
+        system_prompt: str | None = None,
+        session_budget: Budget | None = None,
+        resume_session_id: str | None = None,
+        verbosity: Verbosity = Verbosity.QUIET,
+        log_dir: str | Path | None = None,
+    ) -> PersistentCodingSession:
+        """Open a persistent ACP session for multi-turn coding follow-ups.
+
+        The returned object owns one ACP subprocess and serializes each call to
+        ``execute`` or ``stream_execute`` onto the same remote session until
+        ``close`` is called. Use it as an async context manager when possible.
+
+        Args:
+            cwd: Fixed working directory for every follow-up.
+            allowed_write_paths: Optional write restrictions fixed for the session.
+            system_prompt: Optional instructions fixed for the session.
+            session_budget: Optional cumulative budget across all follow-ups.
+            resume_session_id: Existing ACP session ID to resume or load. The
+                ACP agent must advertise the corresponding capability.
+            verbosity: Output verbosity level.
+            log_dir: Optional path to save prompt/response logs.
+        """
+        if self._backend_type != BACKEND_ACP:
+            from .data_models import ConfigurationError
+
+            raise ConfigurationError(
+                "open_session() currently supports only backend='acp'.",
+                parameter="backend",
+                value=self._backend_type,
+            )
+
+        coding_session = self._setup_session(verbosity, log_dir)
+        base_request = CodingRequest(
+            prompt="",
+            cwd=cwd,
+            allowed_write_paths=allowed_write_paths,
+            system_prompt=system_prompt,
+        )
+        persistent = PersistentCodingSession(
+            coding_session,
+            base_request,
+            session_budget=session_budget,
+            resume_session_id=resume_session_id,
+        )
+        return await persistent.start()
 
     async def execute(
         self,

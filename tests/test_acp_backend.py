@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -137,6 +139,49 @@ class TestACPBackendLifecycle:
         connection.initialize.assert_awaited_once_with(protocol_version=1)
         connection.new_session.assert_awaited_once_with(cwd=str(tmp_path.resolve()), mcp_servers=[])
         assert backend._session_id == "session-1"
+
+    @pytest.mark.asyncio
+    async def test_connect_accepts_frames_larger_than_the_default_stream_limit(
+        self, tmp_path
+    ) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+
+        default_stream_limit = asyncio.StreamReader()._limit
+        agent_script = tmp_path / "large_frame_acp_agent.py"
+        agent_script.write_text(
+            f"""
+import json
+import sys
+
+padding = "x" * {default_stream_limit + 1}
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        result = {{
+            "protocolVersion": 1,
+            "agentCapabilities": {{}},
+            "agentInfo": {{"name": "large-frame-agent", "version": "1"}},
+            "_padding": padding,
+        }}
+    elif method == "session/new":
+        result = {{"sessionId": "large-frame-session"}}
+    else:
+        result = {{}}
+    print(
+        json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": result}}),
+        flush=True,
+    )
+""",
+            encoding="utf-8",
+        )
+        backend = ACPBackend(command=sys.executable, args=[str(agent_script)])
+
+        try:
+            await backend.connect(str(tmp_path))
+            assert backend.session_id == "large-frame-session"
+        finally:
+            await backend.disconnect()
 
     @pytest.mark.asyncio
     async def test_execute_requires_connect(self) -> None:

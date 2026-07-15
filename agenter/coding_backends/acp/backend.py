@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import os
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -221,12 +222,14 @@ class ACPBackend:
         self._system_prompt = system_prompt
         client = _AgenterACPClient(self)
         spawn_kwargs: dict[str, Any] = {}
+        signature = inspect.signature(spawn_agent_process)
         if self.env:
-            signature = inspect.signature(spawn_agent_process)
             if "env" in signature.parameters:
                 spawn_kwargs["env"] = {**os.environ, **self.env}
             else:
                 logger.warning("acp_env_ignored", reason="spawn_agent_process does not accept env")
+        if "transport_kwargs" in signature.parameters:
+            spawn_kwargs["transport_kwargs"] = {"limit": sys.maxsize}
 
         if self.sandbox:
             logger.warning("acp_sandbox_depends_on_agent", command=self.command)

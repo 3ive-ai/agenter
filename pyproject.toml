@@ -33,7 +33,7 @@ dependencies = [
 claude-code = ["claude-agent-sdk>=0.1.0"]
 codex = ["openai-agents>=0.6.0", "openai>=2.9.0,<3", "mcp>=1.0.0", "cloudpickle>=3.0.0", "tiktoken>=0.7.0"]
 openhands = ["openhands-sdk>=1.0", "openhands-tools>=1.0"]
-acp = ["agent-client-protocol>=0.9.0,<1.0.0"]
+acp = ["agent-client-protocol>=0.10.0,<1.0.0"]
 
 # Framework adapters (individual)
 pydantic-ai = ["pydantic-ai>=0.1.0"]
@@ -65,7 +65,7 @@ all-backends = [
     "claude-agent-sdk>=0.1.0",
     "openai-agents>=0.6.0", "openai>=2.9.0,<3", "mcp>=1.0.0", "cloudpickle>=3.0.0", "tiktoken>=0.7.0",
     "openhands-sdk>=1.0", "openhands-tools>=1.0",
-    "agent-client-protocol>=0.9.0,<1.0.0",
+    "agent-client-protocol>=0.10.0,<1.0.0",
 ]
 
 # Documentation

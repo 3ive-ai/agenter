@@ -7,16 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-17
+
 ### Added
 - Persistent ACP sessions through `AutonomousCodingAgent.open_session()` with serialized follow-ups
 - Stable ACP session/request trace identifiers and per-request plus cumulative usage metadata
 - Explicit usage availability so an ACP adapter's missing metrics are not mistaken for measured zero usage
 - ACP `session/resume` support with legacy `session/load` fallback
 - Active ACP prompt cancellation without discarding the persistent session
+- Live ACP session updates through a host callback
 
 ### Changed
 - Split backend connection lifetime from individual `CodingSession` requests while preserving one-shot `execute()` behavior
 - Track ACP file changes separately for the latest turn, high-level request, and full session
+- Require `agent-client-protocol` 0.10 or later so ACP transport frames are not arbitrarily truncated
+
+### Fixed
+- Type checking when the optional ACP dependency is not installed
+
+## [0.1.3] - 2026-05-19
+
+### Added
+- Agent Client Protocol backend for ACP-compatible agent subprocesses
+
+### Changed
+- Pass model and thinking-token settings through to the Claude Code backend
+- Support reasoning-effort configuration in the Codex backend
+
+### Fixed
+- Exclude bytecode caches from file-change results for path-only backends
 
 ## [0.1.2] - 2026-03-24
 
@@ -52,6 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive type hints and Pydantic models
 - Structured logging with structlog
 
-[Unreleased]: https://github.com/moonsong-labs/agenter/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/moonsong-labs/agenter/compare/v0.1.0...v0.1.2
-[0.1.0]: https://github.com/moonsong-labs/agenter/releases/tag/v0.1.0
+[Unreleased]: https://github.com/3ive-ai/agenter/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/3ive-ai/agenter/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/3ive-ai/agenter/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/3ive-ai/agenter/compare/v0.1.0...v0.1.2
+[0.1.0]: https://github.com/3ive-ai/agenter/releases/tag/v0.1.0

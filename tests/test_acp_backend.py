@@ -141,9 +141,7 @@ class TestACPBackendLifecycle:
         assert backend._session_id == "session-1"
 
     @pytest.mark.asyncio
-    async def test_connect_accepts_frames_larger_than_the_default_stream_limit(
-        self, tmp_path
-    ) -> None:
+    async def test_connect_accepts_frames_larger_than_the_default_stream_limit(self, tmp_path) -> None:
         from agenter.coding_backends.acp import ACPBackend
 
         default_stream_limit = asyncio.StreamReader()._limit

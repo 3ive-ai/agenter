@@ -8,7 +8,7 @@ Agenter requires Python 3.12+ and uses [uv](https://docs.astral.sh/uv/) for depe
 
 1.  **Clone the repository**
     ```bash
-    git clone https://github.com/moonsong-labs/agenter.git
+    git clone https://github.com/3ive-ai/agenter.git
     cd agenter
     ```
 

@@ -4,7 +4,7 @@ Delegate coding tasks to a separate autonomous agent instead of writing code
 tool-by-tool. Your context window stays clean. The sub-agent validates its
 output, retries on errors, and comes back with structured JSON results.
 
-Powered by [Agenter](https://github.com/Moonsong-Labs/agenter) — a
+Powered by [Agenter](https://github.com/3ive-ai/agenter) — a
 backend-agnostic SDK for autonomous coding agents.
 
 ## How it compares
@@ -46,7 +46,7 @@ clawhub install agenter-coder
 ### From this repo
 
 ```bash
-git clone https://github.com/Moonsong-Labs/agenter.git
+git clone https://github.com/3ive-ai/agenter.git
 cp -r agenter/integrations/openclaw ~/.openclaw/workspace/skills/agenter-coder
 ```
 
@@ -118,5 +118,5 @@ The agent automatically selects appropriate budget limits based on task complexi
 
 ## Links
 
-- [Agenter SDK](https://github.com/Moonsong-Labs/agenter) — The underlying coding agent SDK
+- [Agenter SDK](https://github.com/3ive-ai/agenter) — The underlying coding agent SDK
 - [OpenClaw](https://openclaw.ai) — The AI agent platform

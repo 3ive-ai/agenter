@@ -66,6 +66,6 @@ api
 
 ## Links
 
-- [GitHub Repository](https://github.com/moonsong-labs/agenter)
+- [GitHub Repository](https://github.com/3ive-ai/agenter)
 - [PyPI Package](https://pypi.org/project/agenter/)
-- [Issue Tracker](https://github.com/moonsong-labs/agenter/issues)
+- [Issue Tracker](https://github.com/3ive-ai/agenter/issues)

@@ -6,15 +6,15 @@
 
 *The backend-agnostic SDK for orchestrating autonomous AI coding agents.*
 
-[![CI](https://github.com/moonsong-labs/agenter/actions/workflows/ci.yml/badge.svg)](https://github.com/moonsong-labs/agenter/actions/workflows/ci.yml)
+[![CI](https://github.com/3ive-ai/agenter/actions/workflows/ci.yml/badge.svg)](https://github.com/3ive-ai/agenter/actions/workflows/ci.yml)
 [![Docs](https://readthedocs.org/projects/agenter/badge/?version=latest)](https://agenter.readthedocs.io)
 [![PyPI version](https://img.shields.io/pypi/v/agenter)](https://pypi.org/project/agenter/)
 [![Python versions](https://img.shields.io/pypi/pyversions/agenter)](https://pypi.org/project/agenter/)
-[![License](https://img.shields.io/github/license/moonsong-labs/agenter)](LICENSE)
+[![License](https://img.shields.io/github/license/3ive-ai/agenter)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked](https://img.shields.io/badge/mypy-checked-blue)](http://mypy-lang.org/)
 
-[Documentation](https://agenter.readthedocs.io) • [Architecture](https://github.com/moonsong-labs/agenter/blob/main/docs/ARCHITECTURE.md)
+[Documentation](https://agenter.readthedocs.io) • [Architecture](https://github.com/3ive-ai/agenter/blob/main/docs/ARCHITECTURE.md)
 
 </div>
 

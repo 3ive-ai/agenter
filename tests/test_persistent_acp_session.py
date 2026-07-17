@@ -245,9 +245,7 @@ async def test_acp_resume_uses_advertised_resume_capability(tmp_path, monkeypatc
     from agenter.coding_backends.acp import backend as acp_backend_module
 
     connection = SimpleNamespace(
-        initialize=AsyncMock(
-            return_value={"agentCapabilities": {"sessionCapabilities": {"resume": {}}}}
-        ),
+        initialize=AsyncMock(return_value={"agentCapabilities": {"sessionCapabilities": {"resume": {}}}}),
         new_session=AsyncMock(),
         resume_session=AsyncMock(return_value={}),
     )

@@ -45,7 +45,7 @@ wheels = [
 
 [[package]]
 name = "agenter"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
@@ -87,6 +87,7 @@ codex = [
     { name = "tiktoken" },
 ]
 dev = [
+    { name = "agent-client-protocol" },
     { name = "ipython" },
     { name = "jupyter" },
     { name = "mypy" },
@@ -124,6 +125,7 @@ security = [
 requires-dist = [
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = ">=0.10.0,<1.0.0" },
     { name = "agent-client-protocol", marker = "extra == 'all-backends'", specifier = ">=0.10.0,<1.0.0" },
+    { name = "agent-client-protocol", marker = "extra == 'dev'", specifier = ">=0.10.0,<1.0.0" },
     { name = "anthropic", extras = ["bedrock"], specifier = ">=0.40.0" },
     { name = "bandit", marker = "extra == 'security'", specifier = ">=1.7.0" },
     { name = "claude-agent-sdk", marker = "extra == 'all-backends'", specifier = ">=0.1.0" },

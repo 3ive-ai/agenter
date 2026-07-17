@@ -220,9 +220,7 @@ class ACPBackend:
         self._output_type = output_type
         self._system_prompt = system_prompt
         client = _AgenterACPClient(self)
-        spawn_kwargs: dict[str, Any] = {
-            "transport_kwargs": {"limit": sys.maxsize}
-        }
+        spawn_kwargs: dict[str, Any] = {"transport_kwargs": {"limit": sys.maxsize}}
         if self.env:
             spawn_kwargs["env"] = {**os.environ, **self.env}
 

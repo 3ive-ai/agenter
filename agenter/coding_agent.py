@@ -23,7 +23,7 @@ from .post_validators.syntax import SyntaxValidator
 from .runtime import CodingSession, ConsoleDisplay, PersistentCodingSession, Tracer
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
     from .coding_backends.codex import CodexBackend, CodexMCPServer
     from .post_validators.protocol import Validator
@@ -87,6 +87,8 @@ class AutonomousCodingAgent:
         acp_permission_policy: str = "deny",
         acp_autonomous: bool = True,
         acp_update_callback: Callable[[Any], None] | None = None,
+        acp_stream_observer: Callable[[Any], Awaitable[None] | None] | None = None,
+        acp_session_meta: dict[str, Any] | None = None,
     ):
         """Initialize the agent.
 
@@ -136,6 +138,11 @@ class AutonomousCodingAgent:
                 Defaults to True.
             acp_update_callback: Optional synchronous callback invoked for each raw ACP
                 session update as it arrives (acp only).
+            acp_stream_observer: Optional callback invoked for every inbound and outbound
+                raw ACP JSON-RPC frame (acp only). Observer failures are isolated by the
+                ACP connection and do not fail the agent session.
+            acp_session_meta: Optional vendor-neutral metadata fields included in ACP
+                session/new, session/resume, or session/load requests (acp only).
         """
         if backend is None:
             backend = default_backend()
@@ -174,6 +181,8 @@ class AutonomousCodingAgent:
         self._acp_permission_policy = acp_permission_policy
         self._acp_autonomous = acp_autonomous
         self._acp_update_callback = acp_update_callback
+        self._acp_stream_observer = acp_stream_observer
+        self._acp_session_meta = dict(acp_session_meta or {})
 
         if backend == BACKEND_CLAUDE_CODE and use_anthropic_tools:
             logger.warning(
@@ -207,11 +216,14 @@ class AutonomousCodingAgent:
             or acp_permission_policy != "deny"
             or not acp_autonomous
             or acp_update_callback is not None
+            or acp_stream_observer is not None
+            or acp_session_meta
         )
         if backend != BACKEND_ACP and acp_opts_set:
             logger.warning(
                 "acp_command, acp_args, acp_env, acp_mcp_servers, acp_permission_policy, "
-                "acp_autonomous, and acp_update_callback are only used with acp backend."
+                "acp_autonomous, acp_update_callback, acp_stream_observer, and "
+                "acp_session_meta are only used with acp backend."
             )
 
         if backend == BACKEND_OPENHANDS:
@@ -410,6 +422,8 @@ class AutonomousCodingAgent:
                 permission_policy=self._acp_permission_policy,
                 autonomous=self._acp_autonomous,
                 update_callback=self._acp_update_callback,
+                stream_observer=self._acp_stream_observer,
+                session_meta=self._acp_session_meta,
             )
         elif self._backend_type == BACKEND_OPENHANDS:
             from .coding_backends.openhands import OpenHandsBackend

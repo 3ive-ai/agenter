@@ -88,6 +88,26 @@ class TestACPBackendFacade:
         assert isinstance(backend, ACPBackend)
         assert backend.update_callback is callback
 
+    def test_agent_facade_passes_raw_stream_observer_and_session_meta(self) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+
+        def observer(_event):
+            return None
+
+        session_meta = {"claudeCode": {"options": {"thinking": {"display": "summarized"}}}}
+        agent = AutonomousCodingAgent(
+            backend="acp",
+            acp_command="fake-acp-agent",
+            acp_stream_observer=observer,
+            acp_session_meta=session_meta,
+        )
+
+        backend = agent._create_backend()
+
+        assert isinstance(backend, ACPBackend)
+        assert backend.stream_observer is observer
+        assert backend.session_meta == session_meta
+
 
 class FakeACPProcessContext:
     """Async context manager returned by fake spawn_agent_process."""
@@ -139,6 +159,40 @@ class TestACPBackendLifecycle:
         connection.initialize.assert_awaited_once_with(protocol_version=1)
         connection.new_session.assert_awaited_once_with(cwd=str(tmp_path.resolve()), mcp_servers=[])
         assert backend._session_id == "session-1"
+
+    @pytest.mark.asyncio
+    async def test_connect_passes_stream_observer_and_session_meta(self, tmp_path, monkeypatch) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+        from agenter.coding_backends.acp import backend as acp_backend_module
+
+        observed = []
+        connection = SimpleNamespace(
+            initialize=AsyncMock(),
+            new_session=AsyncMock(return_value=SimpleNamespace(session_id="session-1")),
+        )
+        context = FakeACPProcessContext(connection)
+        spawned = {}
+
+        def fake_spawn_agent_process(client, command, *args, **kwargs):
+            spawned["kwargs"] = kwargs
+            return context
+
+        monkeypatch.setattr(acp_backend_module, "spawn_agent_process", fake_spawn_agent_process, raising=False)
+        session_meta = {"claudeCode": {"options": {"thinking": {"type": "adaptive", "display": "summarized"}}}}
+        backend = ACPBackend(
+            command="fake-acp-agent",
+            stream_observer=observed.append,
+            session_meta=session_meta,
+        )
+
+        await backend.connect(str(tmp_path))
+
+        assert spawned["kwargs"]["observers"] == [observed.append]
+        connection.new_session.assert_awaited_once_with(
+            cwd=str(tmp_path.resolve()),
+            mcp_servers=[],
+            **session_meta,
+        )
 
     @pytest.mark.asyncio
     async def test_connect_accepts_frames_larger_than_the_default_stream_limit(self, tmp_path) -> None:

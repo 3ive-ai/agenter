@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-21
+
+### Added
+- Raw inbound and outbound ACP JSON-RPC stream observers for complete host-side protocol tracing
+- Vendor-neutral ACP session metadata for `session/new`, `session/resume`, and `session/load`
+
+### Changed
+- Isolate stream-observer failures inside the ACP connection so observability cannot fail an agent session
+
 ## [0.1.4] - 2026-07-17
 
 ### Added
@@ -71,7 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive type hints and Pydantic models
 - Structured logging with structlog
 
-[Unreleased]: https://github.com/3ive-ai/agenter/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/3ive-ai/agenter/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/3ive-ai/agenter/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/3ive-ai/agenter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/3ive-ai/agenter/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/3ive-ai/agenter/compare/v0.1.0...v0.1.2

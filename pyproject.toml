@@ -1,6 +1,6 @@
 [project]
 name = "agenter"
-version = "0.1.4"
+version = "0.1.5"
 description = "Agenter — Backend-agnostic SDK for autonomous coding agents supporting Claude, Codex, Anthropic, and AWS Bedrock with streaming, budget controls, security validation, and LangGraph/PydanticAI adapters."
 requires-python = ">=3.12"
 license = "Apache-2.0"

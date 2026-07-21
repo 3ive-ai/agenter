@@ -37,7 +37,7 @@ except ImportError:
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 
 ACP_AUTONOMOUS_CONTRACT = """You are being called as a backend by Agenter.
@@ -158,6 +158,8 @@ class ACPBackend:
         permission_policy: str = "deny",
         autonomous: bool = True,
         update_callback: Callable[[Any], None] | None = None,
+        stream_observer: Callable[[Any], Awaitable[None] | None] | None = None,
+        session_meta: dict[str, Any] | None = None,
     ) -> None:
         if permission_policy not in {"deny", "allow"}:
             raise ConfigurationError(
@@ -174,6 +176,8 @@ class ACPBackend:
         self.permission_policy = permission_policy
         self.autonomous = autonomous
         self.update_callback = update_callback
+        self.stream_observer = stream_observer
+        self.session_meta = dict(session_meta or {})
         self._cwd: Path | None = None
         self._connection: Any = None
         self._process_context: Any = None
@@ -223,6 +227,8 @@ class ACPBackend:
         spawn_kwargs: dict[str, Any] = {"transport_kwargs": {"limit": sys.maxsize}}
         if self.env:
             spawn_kwargs["env"] = {**os.environ, **self.env}
+        if self.stream_observer is not None:
+            spawn_kwargs["observers"] = [self.stream_observer]
 
         if self.sandbox:
             logger.warning("acp_sandbox_depends_on_agent", command=self.command)
@@ -232,13 +238,18 @@ class ACPBackend:
         self._connection, self._process = await self._process_context.__aenter__()
         initialization = await self._connection.initialize(protocol_version=1)
         if resume_session_id is None:
-            session = await self._connection.new_session(cwd=str(self._cwd), mcp_servers=self.mcp_servers)
+            session = await self._connection.new_session(
+                cwd=str(self._cwd),
+                mcp_servers=self.mcp_servers,
+                **self.session_meta,
+            )
             self._session_id = self._extract_session_id(session)
         elif self._supports_resume(initialization):
             await self._connection.resume_session(
                 cwd=str(self._cwd),
                 session_id=resume_session_id,
                 mcp_servers=self.mcp_servers,
+                **self.session_meta,
             )
             self._session_id = resume_session_id
         elif self._supports_load(initialization):
@@ -246,6 +257,7 @@ class ACPBackend:
                 cwd=str(self._cwd),
                 session_id=resume_session_id,
                 mcp_servers=self.mcp_servers,
+                **self.session_meta,
             )
             self._session_id = resume_session_id
         else:

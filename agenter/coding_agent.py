@@ -89,6 +89,8 @@ class AutonomousCodingAgent:
         acp_update_callback: Callable[[Any], None] | None = None,
         acp_stream_observer: Callable[[Any], Awaitable[None] | None] | None = None,
         acp_session_meta: dict[str, Any] | None = None,
+        acp_max_stream_disconnect_retries: int = 2,
+        acp_stream_retry_backoff_seconds: float = 1.0,
     ):
         """Initialize the agent.
 
@@ -143,6 +145,12 @@ class AutonomousCodingAgent:
                 ACP connection and do not fail the agent session.
             acp_session_meta: Optional vendor-neutral metadata fields included in ACP
                 session/new, session/resume, or session/load requests (acp only).
+            acp_max_stream_disconnect_retries: How many times to transparently retry a
+                turn that aborts with a retryable transport fault (provider stream
+                disconnect, RPC error) before surfacing CodingStatus.ERROR (acp only,
+                default 2). Set to 0 to fail fast.
+            acp_stream_retry_backoff_seconds: Linear backoff base between stream-disconnect
+                retries; attempt N waits N * this many seconds (acp only, default 1.0).
         """
         if backend is None:
             backend = default_backend()
@@ -183,6 +191,8 @@ class AutonomousCodingAgent:
         self._acp_update_callback = acp_update_callback
         self._acp_stream_observer = acp_stream_observer
         self._acp_session_meta = dict(acp_session_meta or {})
+        self._acp_max_stream_disconnect_retries = acp_max_stream_disconnect_retries
+        self._acp_stream_retry_backoff_seconds = acp_stream_retry_backoff_seconds
 
         if backend == BACKEND_CLAUDE_CODE and use_anthropic_tools:
             logger.warning(
@@ -218,6 +228,8 @@ class AutonomousCodingAgent:
             or acp_update_callback is not None
             or acp_stream_observer is not None
             or acp_session_meta
+            or acp_max_stream_disconnect_retries != 2
+            or acp_stream_retry_backoff_seconds != 1.0
         )
         if backend != BACKEND_ACP and acp_opts_set:
             logger.warning(
@@ -424,6 +436,8 @@ class AutonomousCodingAgent:
                 update_callback=self._acp_update_callback,
                 stream_observer=self._acp_stream_observer,
                 session_meta=self._acp_session_meta,
+                max_stream_disconnect_retries=self._acp_max_stream_disconnect_retries,
+                stream_retry_backoff_seconds=self._acp_stream_retry_backoff_seconds,
             )
         elif self._backend_type == BACKEND_OPENHANDS:
             from .coding_backends.openhands import OpenHandsBackend

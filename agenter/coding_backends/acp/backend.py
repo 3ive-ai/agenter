@@ -35,7 +35,7 @@ except ImportError:
     acp_schema = None  # type: ignore[assignment]
     spawn_agent_process = None  # type: ignore[assignment]
     text_block = None  # type: ignore[assignment]
-    RequestError = None  # type: ignore[assignment]
+    RequestError = None  # type: ignore[assignment,misc]
 
 # When acp is unavailable, RequestError is None; `except ()` then catches nothing,
 # which is correct because _send_prompt is only reachable once connect() succeeded.

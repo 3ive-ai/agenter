@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `ACPBackend` now transparently retries a turn that aborts with a *retryable* transport fault (provider stream disconnect, RPC error), re-sending the same prompt on the warm session before surfacing `CodingStatus.ERROR`. Bounded by the new `max_stream_disconnect_retries` (default 2) and `stream_retry_backoff_seconds` (default 1.0, linear) constructor arguments; set retries to 0 to restore fail-fast behavior. Non-retryable outcomes (refusal, cancellation, max_tokens) are never retried, and an exhausted retry still reports an honest error rather than a silent success.
+- `AutonomousCodingAgent` exposes the retry policy via `acp_max_stream_disconnect_retries` and `acp_stream_retry_backoff_seconds` so callers can tune or disable it without constructing `ACPBackend` directly
+- `CodingBackend.turn_error()` now has a `None`-returning default on `BaseBackend`, so non-ACP backends satisfy the protocol without change
 
 ## [0.1.6] - 2026-08-18
 

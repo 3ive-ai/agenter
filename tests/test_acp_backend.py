@@ -108,6 +108,22 @@ class TestACPBackendFacade:
         assert backend.stream_observer is observer
         assert backend.session_meta == session_meta
 
+    def test_agent_facade_passes_stream_retry_policy(self) -> None:
+        from agenter.coding_backends.acp import ACPBackend
+
+        agent = AutonomousCodingAgent(
+            backend="acp",
+            acp_command="fake-acp-agent",
+            acp_max_stream_disconnect_retries=5,
+            acp_stream_retry_backoff_seconds=0.25,
+        )
+
+        backend = agent._create_backend()
+
+        assert isinstance(backend, ACPBackend)
+        assert backend._max_stream_disconnect_retries == 5
+        assert backend._stream_retry_backoff_seconds == 0.25
+
 
 class FakeACPProcessContext:
     """Async context manager returned by fake spawn_agent_process."""

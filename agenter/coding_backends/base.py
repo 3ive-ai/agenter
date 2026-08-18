@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
+    from ..data_models import TurnError
+
 
 class BaseBackend(RefusalDetector):
     """Base class for all coding backends.
@@ -61,6 +63,15 @@ class BaseBackend(RefusalDetector):
         return self._structured_output
 
     # refusal() is inherited from RefusalDetector
+
+    def turn_error(self) -> TurnError | None:
+        """Return a non-task turn failure (transport/provider fault), if any.
+
+        Default implementation: backends that cannot detect mid-stream transport
+        faults report none. ACPBackend overrides this. See the CodingBackend
+        protocol for the full contract.
+        """
+        return None
 
     def _build_system_prompt_from_template(
         self,

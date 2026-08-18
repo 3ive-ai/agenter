@@ -176,6 +176,8 @@ class ACPBackend:
         stream_observer: Callable[[Any], Awaitable[None] | None] | None = None,
         session_meta: dict[str, Any] | None = None,
         stream_abort_sentinels: list[str] | None = None,
+        max_stream_disconnect_retries: int = 2,
+        stream_retry_backoff_seconds: float = 1.0,
     ) -> None:
         if permission_policy not in {"deny", "allow"}:
             raise ConfigurationError(
@@ -197,6 +199,8 @@ class ACPBackend:
         self._stream_abort_sentinels = tuple(
             marker.lower() for marker in (stream_abort_sentinels or _DEFAULT_STREAM_ABORT_SENTINELS)
         )
+        self._max_stream_disconnect_retries = max(0, max_stream_disconnect_retries)
+        self._stream_retry_backoff_seconds = max(0.0, stream_retry_backoff_seconds)
         self._cwd: Path | None = None
         self._connection: Any = None
         self._process_context: Any = None
@@ -314,51 +318,89 @@ class ACPBackend:
                 raise BackendError("ACPBackend is not connected. Call connect() before execute().", backend="acp")
             self._prompt_active = True
             try:
-                self._refusal = None
-                self._turn_error = None
-                self._last_stop_reason = None
-                session_start_snapshot = self._file_snapshot
-                request_start_snapshot = self._request_snapshot or session_start_snapshot
-                turn_start_snapshot = self._snapshot_files()
-
-                updates, after_snapshot, stop_reason = await self._send_prompt(self._format_prompt(prompt))
-                turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
-                modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
-                request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
-                all_updates = list(updates)
-                update_batches = [list(updates)]
-
-                if self.autonomous and not turn_modified_paths and self._looks_like_confirmation_request(updates):
-                    logger.info("acp_auto_continuing_confirmation_request")
-                    continuation_updates, after_snapshot, stop_reason = await self._send_prompt(
-                        ACP_AUTONOMOUS_CONTINUE_PROMPT
-                    )
-                    update_batches.append(list(continuation_updates))
-                    all_updates.extend(continuation_updates)
-                    turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
-                    modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
-                    request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
-                    if not turn_modified_paths and self._looks_like_confirmation_request(all_updates):
-                        self._refusal = RefusalMessage(
-                            reason="ACP agent asked for confirmation instead of modifying files.",
-                            category="capability",
-                        )
-
-                self._turn_modified_paths = turn_modified_paths
-                self._request_modified_paths = request_modified_paths
-                self._modified_paths = modified_paths
-                self._last_stop_reason = stop_reason
-
-                # Classify non-completion outcomes the ACP protocol/agent signalled.
-                # _turn_error may already be set if prompt() raised an RPC error.
-                if self._turn_error is None and self._refusal is None:
-                    self._classify_turn_outcome(all_updates, stop_reason, turn_modified_paths)
-
+                update_batches = await self._run_turn_with_retries(self._format_prompt(prompt))
                 for updates_batch in update_batches:
                     for message in self._map_updates(updates_batch):
                         yield message
             finally:
                 self._prompt_active = False
+
+    async def _run_turn_with_retries(self, formatted_prompt: str) -> list[list[Any]]:
+        """Run one ACP turn, transparently retrying transient transport faults.
+
+        A retryable turn error (provider stream disconnect, RPC failure) re-sends the
+        *same* prompt on the warm session up to ``max_stream_disconnect_retries`` times
+        with linear backoff. Non-retryable outcomes (refusal, cancellation, max_tokens)
+        and successful turns return immediately. If every attempt fails, the last
+        attempt's turn_error is left in place for the session to map to
+        CodingStatus.ERROR — so an exhausted retry surfaces as an honest failure, never
+        as a silent success.
+        """
+        attempt = 0
+        while True:
+            update_batches = await self._run_turn(formatted_prompt)
+            turn_error = self._turn_error
+            if turn_error is None or not turn_error.retryable or attempt >= self._max_stream_disconnect_retries:
+                if turn_error is not None and turn_error.retryable and attempt > 0:
+                    logger.warning("acp_turn_retry_exhausted", attempts=attempt, kind=turn_error.kind)
+                return update_batches
+            attempt += 1
+            backoff = self._stream_retry_backoff_seconds * attempt
+            logger.warning(
+                "acp_turn_retry",
+                attempt=attempt,
+                max_attempts=self._max_stream_disconnect_retries,
+                kind=turn_error.kind,
+                backoff_seconds=backoff,
+            )
+            if backoff > 0:
+                await asyncio.sleep(backoff)
+
+    async def _run_turn(self, formatted_prompt: str) -> list[list[Any]]:
+        """Execute a single ACP turn (one prompt send plus optional auto-continuation).
+
+        Sets self._refusal / self._turn_error / snapshot state as side effects and
+        returns the raw update batches for execute() to map into BackendMessages.
+        """
+        self._refusal = None
+        self._turn_error = None
+        self._last_stop_reason = None
+        session_start_snapshot = self._file_snapshot
+        request_start_snapshot = self._request_snapshot or session_start_snapshot
+        turn_start_snapshot = self._snapshot_files()
+
+        updates, after_snapshot, stop_reason = await self._send_prompt(formatted_prompt)
+        turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
+        modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
+        request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
+        all_updates = list(updates)
+        update_batches = [list(updates)]
+
+        if self.autonomous and not turn_modified_paths and self._looks_like_confirmation_request(updates):
+            logger.info("acp_auto_continuing_confirmation_request")
+            continuation_updates, after_snapshot, stop_reason = await self._send_prompt(ACP_AUTONOMOUS_CONTINUE_PROMPT)
+            update_batches.append(list(continuation_updates))
+            all_updates.extend(continuation_updates)
+            turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
+            modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
+            request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
+            if not turn_modified_paths and self._looks_like_confirmation_request(all_updates):
+                self._refusal = RefusalMessage(
+                    reason="ACP agent asked for confirmation instead of modifying files.",
+                    category="capability",
+                )
+
+        self._turn_modified_paths = turn_modified_paths
+        self._request_modified_paths = request_modified_paths
+        self._modified_paths = modified_paths
+        self._last_stop_reason = stop_reason
+
+        # Classify non-completion outcomes the ACP protocol/agent signalled.
+        # _turn_error may already be set if prompt() raised an RPC error.
+        if self._turn_error is None and self._refusal is None:
+            self._classify_turn_outcome(all_updates, stop_reason, turn_modified_paths)
+
+        return update_batches
 
     async def _send_prompt(self, prompt: str) -> tuple[list[Any], dict[str, tuple[int, int]], str | None]:
         self._pending_updates = []

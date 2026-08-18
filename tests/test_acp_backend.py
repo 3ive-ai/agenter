@@ -873,7 +873,7 @@ class TestACPBackendTurnError:
             # codex settles the turn as end_turn even though the stream dropped.
             return SimpleNamespace(stop_reason="end_turn")
 
-        backend, spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        backend, spawned = self._make_backend(monkeypatch, prompt_side_effect, max_stream_disconnect_retries=0)
         await backend.connect(str(tmp_path))
         _ = [message async for message in backend.execute("do work")]
 
@@ -918,7 +918,7 @@ class TestACPBackendTurnError:
         async def prompt_side_effect(session_id, prompt):
             raise request_error_cls(-32000, "internal error")
 
-        backend, _spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        backend, _spawned = self._make_backend(monkeypatch, prompt_side_effect, max_stream_disconnect_retries=0)
         await backend.connect(str(tmp_path))
         _ = [message async for message in backend.execute("do work")]
 
@@ -951,7 +951,10 @@ class TestACPBackendTurnError:
             return SimpleNamespace(stop_reason="end_turn")
 
         backend, spawned = self._make_backend(
-            monkeypatch, prompt_side_effect, stream_abort_sentinels=["provider_aborted"]
+            monkeypatch,
+            prompt_side_effect,
+            stream_abort_sentinels=["provider_aborted"],
+            max_stream_disconnect_retries=0,
         )
         await backend.connect(str(tmp_path))
         _ = [message async for message in backend.execute("do work")]
@@ -974,3 +977,60 @@ class TestACPBackendTurnError:
         _ = [message async for message in backend.execute("do work")]
 
         assert backend.turn_error() is None
+
+    @pytest.mark.asyncio
+    async def test_retryable_disconnect_is_retried_then_succeeds(self, tmp_path, monkeypatch) -> None:
+        calls = {"n": 0}
+
+        async def prompt_side_effect(session_id, prompt):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                await spawned["client"].session_update(
+                    session_id,
+                    {
+                        "type": "agent_message_chunk",
+                        "content": {"type": "text", "text": "stream disconnected before completion: high demand."},
+                    },
+                )
+            else:
+                await spawned["client"].session_update(
+                    session_id,
+                    {"type": "agent_message_chunk", "content": {"type": "text", "text": "All done."}},
+                )
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(
+            monkeypatch, prompt_side_effect, max_stream_disconnect_retries=2, stream_retry_backoff_seconds=0
+        )
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        assert calls["n"] == 2  # first attempt disconnected, retry succeeded
+        assert backend.turn_error() is None
+
+    @pytest.mark.asyncio
+    async def test_retryable_disconnect_exhausts_retries_and_surfaces_error(self, tmp_path, monkeypatch) -> None:
+        calls = {"n": 0}
+
+        async def prompt_side_effect(session_id, prompt):
+            calls["n"] += 1
+            await spawned["client"].session_update(
+                session_id,
+                {
+                    "type": "agent_message_chunk",
+                    "content": {"type": "text", "text": "stream disconnected before completion: high demand."},
+                },
+            )
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(
+            monkeypatch, prompt_side_effect, max_stream_disconnect_retries=2, stream_retry_backoff_seconds=0
+        )
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        assert calls["n"] == 3  # initial attempt + 2 retries
+        turn_error = backend.turn_error()
+        assert turn_error is not None
+        assert turn_error.kind == "provider_disconnect"
+        assert turn_error.retryable is True

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-18
+
+### Added
+- `ACPBackend` now transparently retries a turn that aborts with a *retryable* transport fault (provider stream disconnect, RPC error), re-sending the same prompt on the warm session before surfacing `CodingStatus.ERROR`. Bounded by the new `max_stream_disconnect_retries` (default 2) and `stream_retry_backoff_seconds` (default 1.0, linear) constructor arguments; set retries to 0 to restore fail-fast behavior. Non-retryable outcomes (refusal, cancellation, max_tokens) are never retried, and an exhausted retry still reports an honest error rather than a silent success.
+
 ## [0.1.6] - 2026-08-18
 
 ### Added
@@ -92,7 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive type hints and Pydantic models
 - Structured logging with structlog
 
-[Unreleased]: https://github.com/3ive-ai/agenter/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/3ive-ai/agenter/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/3ive-ai/agenter/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/3ive-ai/agenter/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/3ive-ai/agenter/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/3ive-ai/agenter/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/3ive-ai/agenter/compare/v0.1.2...v0.1.3

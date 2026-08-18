@@ -23,16 +23,23 @@ from ...data_models import (
     TextMessage,
     ToolCallMessage,
     ToolResult,
+    TurnError,
     Usage,
 )
 
 try:
     from acp import schema as acp_schema
     from acp import spawn_agent_process, text_block
+    from acp.exceptions import RequestError
 except ImportError:
     acp_schema = None  # type: ignore[assignment]
     spawn_agent_process = None  # type: ignore[assignment]
     text_block = None  # type: ignore[assignment]
+    RequestError = None  # type: ignore[assignment]
+
+# When acp is unavailable, RequestError is None; `except ()` then catches nothing,
+# which is correct because _send_prompt is only reachable once connect() succeeded.
+_REQUEST_ERROR_TYPES: tuple[type[BaseException], ...] = (RequestError,) if RequestError is not None else ()
 
 logger = structlog.get_logger(__name__)
 
@@ -72,6 +79,14 @@ _IGNORED_WORKSPACE_DIRS = frozenset(
     }
 )
 _IGNORED_WORKSPACE_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+# Marker an underlying agent (codex) emits as ordinary assistant text when the
+# model stream to the provider drops mid-response. The turn still settles with
+# stop_reason="end_turn", so this text is the ONLY in-band signal that the turn did
+# not actually complete. Confirmed verbatim in the codex binary. Matched
+# case-insensitively as a substring. Extend for other agents via the
+# ACPBackend(stream_abort_sentinels=...) constructor argument without a release.
+_DEFAULT_STREAM_ABORT_SENTINELS = ("stream disconnected before completion",)
 
 
 class _AgenterACPClient:
@@ -160,6 +175,7 @@ class ACPBackend:
         update_callback: Callable[[Any], None] | None = None,
         stream_observer: Callable[[Any], Awaitable[None] | None] | None = None,
         session_meta: dict[str, Any] | None = None,
+        stream_abort_sentinels: list[str] | None = None,
     ) -> None:
         if permission_policy not in {"deny", "allow"}:
             raise ConfigurationError(
@@ -178,6 +194,9 @@ class ACPBackend:
         self.update_callback = update_callback
         self.stream_observer = stream_observer
         self.session_meta = dict(session_meta or {})
+        self._stream_abort_sentinels = tuple(
+            marker.lower() for marker in (stream_abort_sentinels or _DEFAULT_STREAM_ABORT_SENTINELS)
+        )
         self._cwd: Path | None = None
         self._connection: Any = None
         self._process_context: Any = None
@@ -194,6 +213,8 @@ class ACPBackend:
         self._output_type: type[BaseModel] | None = None
         self._structured_output: BaseModel | None = None
         self._refusal: RefusalMessage | None = None
+        self._turn_error: TurnError | None = None
+        self._last_stop_reason: str | None = None
         self._system_prompt: str | None = None
         self._input_tokens = 0
         self._output_tokens = 0
@@ -294,11 +315,13 @@ class ACPBackend:
             self._prompt_active = True
             try:
                 self._refusal = None
+                self._turn_error = None
+                self._last_stop_reason = None
                 session_start_snapshot = self._file_snapshot
                 request_start_snapshot = self._request_snapshot or session_start_snapshot
                 turn_start_snapshot = self._snapshot_files()
 
-                updates, after_snapshot = await self._send_prompt(self._format_prompt(prompt))
+                updates, after_snapshot, stop_reason = await self._send_prompt(self._format_prompt(prompt))
                 turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
                 modified_paths = self._diff_snapshot(session_start_snapshot, after_snapshot)
                 request_modified_paths = self._diff_snapshot(request_start_snapshot, after_snapshot)
@@ -307,7 +330,9 @@ class ACPBackend:
 
                 if self.autonomous and not turn_modified_paths and self._looks_like_confirmation_request(updates):
                     logger.info("acp_auto_continuing_confirmation_request")
-                    continuation_updates, after_snapshot = await self._send_prompt(ACP_AUTONOMOUS_CONTINUE_PROMPT)
+                    continuation_updates, after_snapshot, stop_reason = await self._send_prompt(
+                        ACP_AUTONOMOUS_CONTINUE_PROMPT
+                    )
                     update_batches.append(list(continuation_updates))
                     all_updates.extend(continuation_updates)
                     turn_modified_paths = self._diff_snapshot(turn_start_snapshot, after_snapshot)
@@ -322,6 +347,12 @@ class ACPBackend:
                 self._turn_modified_paths = turn_modified_paths
                 self._request_modified_paths = request_modified_paths
                 self._modified_paths = modified_paths
+                self._last_stop_reason = stop_reason
+
+                # Classify non-completion outcomes the ACP protocol/agent signalled.
+                # _turn_error may already be set if prompt() raised an RPC error.
+                if self._turn_error is None and self._refusal is None:
+                    self._classify_turn_outcome(all_updates, stop_reason, turn_modified_paths)
 
                 for updates_batch in update_batches:
                     for message in self._map_updates(updates_batch):
@@ -329,11 +360,34 @@ class ACPBackend:
             finally:
                 self._prompt_active = False
 
-    async def _send_prompt(self, prompt: str) -> tuple[list[Any], dict[str, tuple[int, int]]]:
+    async def _send_prompt(self, prompt: str) -> tuple[list[Any], dict[str, tuple[int, int]], str | None]:
         self._pending_updates = []
         prompt_block = self._text_block(prompt)
-        await self._connection.prompt(session_id=self._session_id, prompt=[prompt_block])
-        return list(self._pending_updates), self._snapshot_files()
+        stop_reason: str | None = None
+        try:
+            response = await self._connection.prompt(session_id=self._session_id, prompt=[prompt_block])
+            stop_reason = self._extract_stop_reason(response)
+        except _REQUEST_ERROR_TYPES as exc:
+            # The ACP RPC itself failed (transport/agent error). This is not a task
+            # failure — surface it as a retryable turn error rather than crashing the
+            # session or silently returning a "successful" empty turn.
+            logger.warning("acp_prompt_request_error", error=str(exc))
+            self._turn_error = TurnError(
+                reason=f"ACP prompt request failed: {exc}",
+                kind="rpc_error",
+                retryable=True,
+                stop_reason=None,
+            )
+        return list(self._pending_updates), self._snapshot_files(), stop_reason
+
+    @staticmethod
+    def _extract_stop_reason(response: Any) -> str | None:
+        if response is None:
+            return None
+        value = getattr(response, "stop_reason", None) or getattr(response, "stopReason", None)
+        if value is None and isinstance(response, dict):
+            value = response.get("stopReason") or response.get("stop_reason")
+        return str(value) if value else None
 
     def _format_prompt(self, prompt: str) -> str:
         parts: list[str] = []
@@ -408,6 +462,77 @@ class ACPBackend:
     def refusal(self) -> RefusalMessage | None:
         return self._refusal
 
+    def turn_error(self) -> TurnError | None:
+        """Return a non-task turn failure (transport/provider fault), if any.
+
+        Mirrors refusal(): the session checks this after execute() to map a
+        broken/aborted turn to CodingStatus.ERROR instead of treating a
+        content-free or prematurely-ended turn as success.
+        """
+        return self._turn_error
+
+    def _classify_turn_outcome(
+        self,
+        updates: list[Any],
+        stop_reason: str | None,
+        turn_modified_paths: list[str],
+    ) -> None:
+        """Detect non-completion outcomes and set self._turn_error / self._refusal.
+
+        Two signals are considered:
+          1. An explicit non-terminal ``stop_reason`` from the ACP PromptResponse
+             (refusal / cancelled / max_tokens / max_turn_requests).
+          2. A stream-abort sentinel in the agent's text. Some agents (codex) settle
+             the turn with stop_reason="end_turn" even when the provider stream dropped
+             mid-response, so the sentinel is the only reliable signal. To avoid
+             misclassifying a genuine turn that merely mentions the phrase, we require
+             that the turn also produced no file changes and no tool calls.
+        """
+        if stop_reason == "refusal":
+            self._refusal = RefusalMessage(
+                reason="ACP agent refused the request (stop_reason=refusal).",
+                category="policy",
+            )
+            return
+        if stop_reason == "cancelled":
+            self._turn_error = TurnError(
+                reason="ACP turn was cancelled before completion.",
+                kind="cancelled",
+                retryable=False,
+                stop_reason=stop_reason,
+            )
+            return
+        if stop_reason in {"max_tokens", "max_turn_requests"}:
+            self._turn_error = TurnError(
+                reason=f"ACP turn stopped early before completing the task (stop_reason={stop_reason}).",
+                kind="max_tokens",
+                retryable=False,
+                stop_reason=stop_reason,
+            )
+            return
+
+        text = self._updates_text(updates)
+        if self._match_stream_abort(text) and not turn_modified_paths and not self._has_tool_calls(updates):
+            self._turn_error = TurnError(
+                reason=text.strip()[:500] or "The agent stream disconnected before completion.",
+                kind="provider_disconnect",
+                retryable=True,
+                stop_reason=stop_reason,
+            )
+
+    def _match_stream_abort(self, text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        return any(sentinel in lowered for sentinel in self._stream_abort_sentinels)
+
+    def _has_tool_calls(self, updates: list[Any]) -> bool:
+        for update in updates:
+            data = self._to_plain_data(update)
+            if self._update_kind(data) in {"tool_call", "tool_call_update"}:
+                return True
+        return False
+
     async def cancel(self) -> None:
         """Cancel the active ACP prompt while keeping the session reusable."""
         if self._connection is None or self._session_id is None:
@@ -433,6 +558,9 @@ class ACPBackend:
         self._request_snapshot = None
         self._request_modified_paths = []
         self._turn_modified_paths = []
+        self._refusal = None
+        self._turn_error = None
+        self._last_stop_reason = None
         self._prompt_active = False
         self._input_tokens = 0
         self._output_tokens = 0

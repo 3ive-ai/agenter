@@ -33,6 +33,12 @@ class CodingStatus(str, Enum):
         REFUSED: LLM explicitly refused the request due to safety, policy,
             or capability limitations. Use result.refusal_reason for details.
         FAILED: True failure (exception, unrecoverable error, not budget-related).
+        ERROR: The turn did not complete because of a transport/provider fault
+            (e.g. the model stream disconnected mid-response, an RPC error, or the
+            agent stopped early) rather than a task-level failure. The task was
+            NOT accomplished; check result.error_kind / result.retryable to decide
+            whether a retry is worthwhile. Distinct from FAILED so callers can tell
+            "the work failed" from "the plumbing broke".
     """
 
     COMPLETED = "completed"
@@ -40,6 +46,7 @@ class CodingStatus(str, Enum):
     FAILED = "failed"
     BUDGET_EXCEEDED = "budget_exceeded"
     REFUSED = "refused"
+    ERROR = "error"
 
 
 class Verbosity(str, Enum):
@@ -69,6 +76,7 @@ class CodingEventType(str, Enum):
     COMPLETED = "completed"  # Task completed successfully
     FAILED = "failed"  # Task failed (budget exceeded, max iterations, etc.)
     REFUSED = "refused"  # LLM explicitly refused the request
+    ERROR = "error"  # Turn aborted by a transport/provider fault (not a task failure)
 
 
 class ContentModifiedFiles(BaseModel):
@@ -210,6 +218,9 @@ class CodingResult(BaseModel):
     usage_reported: bool | None = None  # False when the backend did not emit usage
     exceeded_limit: str | None = None  # Which limit was exceeded (max_iterations, max_tokens, etc.)
     exceeded_values: dict[str, float | int] | None = None  # {limit_value: X, actual_value: Y}
+    error: str | None = None  # Human-readable detail when status is ERROR
+    error_kind: str | None = None  # Machine tag: provider_disconnect|provider_capacity|rpc_error|cancelled|max_tokens
+    retryable: bool | None = None  # True when the ERROR is transient and a retry may succeed
     output: BaseModel | None = None  # Typed structured output
     trace_dir: Path | None = None  # Directory where traces were saved (if tracer was used)
     session_id: str | None = None  # Backend session shared by persistent follow-ups

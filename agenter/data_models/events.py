@@ -101,6 +101,23 @@ class TaskFailed(BaseModel):
     refusal_category: str | None = None
 
 
+class TaskErrored(BaseModel):
+    """The turn aborted because of a transport/provider fault, not a task failure."""
+
+    status: str
+    files: dict[str, str]
+    summary: str
+    iterations: int
+    total_tokens: int
+    cost_usd: float
+    duration_seconds: float
+    usage_reported: bool | None = None
+    error: str
+    error_kind: str
+    retryable: bool = False
+    stop_reason: str | None = None
+
+
 class SessionEnded(BaseModel):
     """Session has ended."""
 
@@ -122,6 +139,7 @@ EventData = (
     | ValidationCompleted
     | RequestRefused
     | TaskCompleted
+    | TaskErrored
     | TaskFailed
     | SessionEnded
 )
@@ -135,6 +153,7 @@ __all__ = [
     "SessionEnded",
     "SessionStarted",
     "TaskCompleted",
+    "TaskErrored",
     "TaskFailed",
     "ValidationCompleted",
     "ValidationStarted",

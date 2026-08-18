@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
-    from ..data_models import BackendMessage, ModifiedFiles, RefusalMessage, Usage
+    from ..data_models import BackendMessage, ModifiedFiles, RefusalMessage, TurnError, Usage
 
 
 class CodingBackend(Protocol):
@@ -132,6 +132,22 @@ class CodingBackend(Protocol):
         Returns:
             RefusalMessage with reason and category if LLM refused,
             None otherwise.
+        """
+        ...
+
+    def turn_error(self) -> TurnError | None:
+        """Return a non-task turn failure, if any (optional).
+
+        Distinct from refusal(): this reports a transport/provider fault that
+        prevented the turn from completing — the model stream disconnected
+        mid-response, an RPC error occurred, the turn was cancelled, or the agent
+        stopped early. The session maps a returned TurnError to
+        CodingStatus.ERROR. Backends that cannot detect such faults may omit this
+        method entirely; the session accesses it defensively via getattr.
+
+        Returns:
+            TurnError with reason/kind/retryable if the turn aborted for a
+            non-task reason, None otherwise.
         """
         ...
 

@@ -29,6 +29,7 @@ from ..data_models import (
     SessionEnded,
     SessionStarted,
     TaskCompleted,
+    TaskErrored,
     TaskFailed,
     TextMessage,
     ToolCallMessage,
@@ -551,6 +552,68 @@ class CodingSession:
                         type=CodingEventType.SESSION_END,
                         data=SessionEnded(
                             status="refused",
+                            iterations=tracker.iterations,
+                            total_tokens=tracker.tokens_used,
+                            cost_usd=usage["cost_usd"],
+                            duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
+                        ),
+                    )
+                    return
+
+                # Check if the turn aborted for a non-task reason (provider stream
+                # disconnect, RPC error, cancellation, early stop). Treat as ERROR
+                # rather than letting a content-free turn fall through to validation
+                # and be reported as a success.
+                turn_error = getattr(self.backend, "turn_error", lambda: None)()
+                if turn_error is not None:
+                    logger.warning(
+                        "acp_turn_error",
+                        kind=turn_error.kind,
+                        retryable=turn_error.retryable,
+                        stop_reason=turn_error.stop_reason,
+                    )
+                    usage = tracker.usage()
+                    file_changes = self._request_modified_files()
+                    result_files = self._prepare_files_for_validation(file_changes, request.cwd)
+                    summary = f"Turn did not complete ({turn_error.kind}): {turn_error.reason}"
+
+                    errored_result = CodingResult(
+                        status=CodingStatus.ERROR,
+                        files=result_files,
+                        summary=summary,
+                        iterations=tracker.iterations,
+                        total_tokens=tracker.tokens_used,
+                        total_cost_usd=usage["cost_usd"],
+                        total_duration_seconds=usage["elapsed_seconds"],
+                        usage_reported=self.backend.usage().reported,
+                        error=turn_error.reason,
+                        error_kind=turn_error.kind,
+                        retryable=turn_error.retryable,
+                        trace_dir=self.tracer.output_dir if self.tracer else None,
+                    )
+                    yield CodingEvent(
+                        type=CodingEventType.ERROR,
+                        data=TaskErrored(
+                            status=CodingStatus.ERROR.value,
+                            files=result_files,
+                            summary=summary,
+                            iterations=tracker.iterations,
+                            total_tokens=tracker.tokens_used,
+                            cost_usd=usage["cost_usd"],
+                            duration_seconds=usage["elapsed_seconds"],
+                            usage_reported=self.backend.usage().reported,
+                            error=turn_error.reason,
+                            error_kind=turn_error.kind,
+                            retryable=turn_error.retryable,
+                            stop_reason=turn_error.stop_reason,
+                        ),
+                        result=errored_result,
+                    )
+                    yield CodingEvent(
+                        type=CodingEventType.SESSION_END,
+                        data=SessionEnded(
+                            status="error",
                             iterations=tracker.iterations,
                             total_tokens=tracker.tokens_used,
                             cost_usd=usage["cost_usd"],

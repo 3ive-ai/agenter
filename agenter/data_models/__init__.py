@@ -22,6 +22,7 @@ from .events import (
     SessionEnded,
     SessionStarted,
     TaskCompleted,
+    TaskErrored,
     TaskFailed,
     ValidationCompleted,
     ValidationStarted,
@@ -41,6 +42,7 @@ from .messages import (
     RefusalMessage,
     TextMessage,
     ToolCallMessage,
+    TurnError,
 )
 from .tools import (
     ToolError,
@@ -93,6 +95,7 @@ __all__ = [
     "SessionEnded",
     "SessionStarted",
     "TaskCompleted",
+    "TaskErrored",
     "TaskFailed",
     "TextMessage",
     "ToolCallMessage",
@@ -100,6 +103,7 @@ __all__ = [
     "ToolErrorCode",
     "ToolExecutionError",
     "ToolResult",
+    "TurnError",
     "Usage",
     "UsageDelta",
     "ValidationCompleted",

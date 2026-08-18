@@ -831,3 +831,146 @@ class TestACPBackendExecution:
         modified = backend.modified_files()
 
         assert modified.file_paths == ["first.py", "second.py"]
+
+
+class TestACPBackendTurnError:
+    """Detection of non-task turn failures (transport/provider faults)."""
+
+    @staticmethod
+    def _make_backend(monkeypatch, prompt_side_effect, **backend_kwargs):
+        from agenter.coding_backends.acp import ACPBackend
+        from agenter.coding_backends.acp import backend as acp_backend_module
+
+        spawned: dict[str, object] = {}
+
+        connection = SimpleNamespace(
+            initialize=AsyncMock(),
+            new_session=AsyncMock(return_value=SimpleNamespace(session_id="session-1")),
+            prompt=AsyncMock(side_effect=prompt_side_effect),
+        )
+        context = FakeACPProcessContext(connection)
+
+        def fake_spawn_agent_process(client, command, *args, **kwargs):
+            spawned["client"] = client
+            return context
+
+        monkeypatch.setattr(acp_backend_module, "spawn_agent_process", fake_spawn_agent_process, raising=False)
+        return ACPBackend(command="fake-acp-agent", **backend_kwargs), spawned
+
+    @pytest.mark.asyncio
+    async def test_stream_disconnect_sentinel_sets_turn_error(self, tmp_path, monkeypatch) -> None:
+        async def prompt_side_effect(session_id, prompt):
+            await spawned["client"].session_update(
+                session_id,
+                {
+                    "type": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": "stream disconnected before completion: The system is experiencing high demand.",
+                    },
+                },
+            )
+            # codex settles the turn as end_turn even though the stream dropped.
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        turn_error = backend.turn_error()
+        assert turn_error is not None
+        assert turn_error.kind == "provider_disconnect"
+        assert turn_error.retryable is True
+        assert turn_error.stop_reason == "end_turn"
+        assert backend.refusal() is None
+
+    @pytest.mark.asyncio
+    async def test_sentinel_ignored_when_files_changed(self, tmp_path, monkeypatch) -> None:
+        async def prompt_side_effect(session_id, prompt):
+            # Mentions the phrase but actually did work — must NOT be flagged.
+            await spawned["client"].session_update(
+                session_id,
+                {
+                    "type": "agent_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": "Earlier the stream disconnected before completion, so I retried.",
+                    },
+                },
+            )
+            (tmp_path / "out.py").write_text("print('done')\n")
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        assert backend.turn_error() is None
+
+    @pytest.mark.asyncio
+    async def test_request_error_becomes_retryable_turn_error(self, tmp_path, monkeypatch) -> None:
+        from agenter.coding_backends.acp import backend as acp_backend_module
+
+        request_error_cls = acp_backend_module.RequestError
+        if request_error_cls is None:  # pragma: no cover - acp always installed in CI
+            pytest.skip("acp RequestError unavailable")
+
+        async def prompt_side_effect(session_id, prompt):
+            raise request_error_cls(-32000, "internal error")
+
+        backend, _spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        turn_error = backend.turn_error()
+        assert turn_error is not None
+        assert turn_error.kind == "rpc_error"
+        assert turn_error.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_cancelled_stop_reason_sets_non_retryable_turn_error(self, tmp_path, monkeypatch) -> None:
+        async def prompt_side_effect(session_id, prompt):
+            return SimpleNamespace(stop_reason="cancelled")
+
+        backend, _spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        turn_error = backend.turn_error()
+        assert turn_error is not None
+        assert turn_error.kind == "cancelled"
+        assert turn_error.retryable is False
+
+    @pytest.mark.asyncio
+    async def test_custom_sentinel_argument_is_honored(self, tmp_path, monkeypatch) -> None:
+        async def prompt_side_effect(session_id, prompt):
+            await spawned["client"].session_update(
+                session_id,
+                {"type": "agent_message_chunk", "content": {"type": "text", "text": "PROVIDER_ABORTED xyz"}},
+            )
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(
+            monkeypatch, prompt_side_effect, stream_abort_sentinels=["provider_aborted"]
+        )
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        turn_error = backend.turn_error()
+        assert turn_error is not None
+        assert turn_error.kind == "provider_disconnect"
+
+    @pytest.mark.asyncio
+    async def test_clean_end_turn_has_no_turn_error(self, tmp_path, monkeypatch) -> None:
+        async def prompt_side_effect(session_id, prompt):
+            await spawned["client"].session_update(
+                session_id,
+                {"type": "agent_message_chunk", "content": {"type": "text", "text": "All done, tests pass."}},
+            )
+            return SimpleNamespace(stop_reason="end_turn")
+
+        backend, spawned = self._make_backend(monkeypatch, prompt_side_effect)
+        await backend.connect(str(tmp_path))
+        _ = [message async for message in backend.execute("do work")]
+
+        assert backend.turn_error() is None

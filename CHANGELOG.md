@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-18
+
+### Added
+- `CodingStatus.ERROR` and `CodingEventType.ERROR` for turns that abort due to a transport/provider fault (stream disconnect, RPC error, cancellation, early stop) rather than a task-level failure
+- `CodingResult.error`, `CodingResult.error_kind`, and `CodingResult.retryable` structured fields, plus a `TaskErrored` event, so callers can distinguish and react to transient turn failures
+- `ACPBackend.turn_error()` side-channel (mirrors `refusal()`) and configurable `stream_abort_sentinels` constructor argument
+
+### Fixed
+- ACP backend no longer discards the `PromptResponse.stop_reason`; `refusal`, `cancelled`, and `max_tokens`/`max_turn_requests` stop reasons are now classified instead of being reported as success
+- A codex-style mid-stream provider disconnect (emitted as ordinary `end_turn` assistant text such as `stream disconnected before completion: …`) with no tool calls and no file changes is now reported as `CodingStatus.ERROR` instead of `COMPLETED`
+- ACP `prompt()` RPC failures (`RequestError`) are surfaced as a retryable turn error rather than crashing the session
+
 ## [0.1.5] - 2026-07-21
 
 ### Added

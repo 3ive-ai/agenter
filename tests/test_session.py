@@ -1,13 +1,24 @@
 """Tests for the CodingSession class."""
 
 import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
 from agenter.coding_backends.anthropic_sdk.backend import AnthropicSDKBackend
 from agenter.config import DEFAULT_MODEL_ANTHROPIC
-from agenter.data_models import BackendError, ContentModifiedFiles, PathsModifiedFiles
+from agenter.data_models import (
+    BackendError,
+    BackendMessage,
+    CodingEventType,
+    CodingRequest,
+    CodingStatus,
+    ContentModifiedFiles,
+    PathsModifiedFiles,
+    TurnError,
+    Usage,
+)
 from agenter.post_validators.syntax import SyntaxValidator
 from agenter.runtime.session import CodingSession
 
@@ -116,3 +127,76 @@ class TestBackendExecuteRequiresConnect:
             with pytest.raises(BackendError, match=r"not connected|claude-agent-sdk is required"):
                 async for _ in backend.execute("test"):
                     pass
+
+
+class _TurnErrorBackend:
+    """Minimal backend that reports a turn_error, to test session mapping."""
+
+    model = "fake"
+
+    def __init__(self, turn_error: TurnError) -> None:
+        self._turn_error = turn_error
+
+    async def connect(self, cwd, allowed_write_paths=None, **kwargs) -> None:
+        self._cwd = cwd
+
+    async def execute(self, prompt: str) -> AsyncIterator[BackendMessage]:
+        # A turn that produced no content — exactly the shape of a stream disconnect.
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    def modified_files(self) -> PathsModifiedFiles:
+        return PathsModifiedFiles(file_paths=[])
+
+    def usage(self) -> Usage:
+        return Usage(input_tokens=0, output_tokens=0, cost_usd=0.0, provider="acp", reported=False)
+
+    def structured_output(self):
+        return None
+
+    def refusal(self):
+        return None
+
+    def turn_error(self) -> TurnError | None:
+        return self._turn_error
+
+    async def disconnect(self) -> None:
+        return None
+
+
+class TestCodingSessionTurnError:
+    """The session maps a backend turn_error to CodingStatus.ERROR."""
+
+    @pytest.mark.asyncio
+    async def test_turn_error_maps_to_error_status(self) -> None:
+        turn_error = TurnError(
+            reason="stream disconnected before completion: high demand",
+            kind="provider_disconnect",
+            retryable=True,
+            stop_reason="end_turn",
+        )
+        backend = _TurnErrorBackend(turn_error)
+        session = CodingSession(backend, validators=[])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            request = CodingRequest(prompt="do work", cwd=tmpdir)
+            result = await session.run(request)
+
+        assert result.status == CodingStatus.ERROR
+        assert result.error_kind == "provider_disconnect"
+        assert result.retryable is True
+        assert "provider_disconnect" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_turn_error_emits_error_event_and_no_completed_event(self) -> None:
+        turn_error = TurnError(reason="rpc boom", kind="rpc_error", retryable=True)
+        backend = _TurnErrorBackend(turn_error)
+        session = CodingSession(backend, validators=[])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            request = CodingRequest(prompt="do work", cwd=tmpdir)
+            event_types = [event.type async for event in session.stream_run(request)]
+
+        assert CodingEventType.ERROR in event_types
+        assert CodingEventType.COMPLETED not in event_types
+        assert event_types[-1] == CodingEventType.SESSION_END
